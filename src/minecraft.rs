@@ -22,8 +22,6 @@ const MODS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents"
 const MODS_RAW_URL: &str = "https://raw.githubusercontent.com/PRISSET/mods/main";
 const SHADERPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/shaderpacks";
 const RESOURCEPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/resourcepacks";
-const FANCYMENU_ASSETS_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/fancymenu/assets";
-const FANCYMENU_CUSTOMIZATION_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/fancymenu/customization";
 
 #[derive(Debug, Clone)]
 pub struct InstallProgress {
@@ -168,7 +166,7 @@ impl MinecraftInstaller {
             .await?;
         
         if !response.status().is_success() {
-            return Err(anyhow!("Не удалось получить список модов"));
+            return Err(anyhow!("Не удалось получить список модов: {}", response.status()));
         }
         
         let files: Vec<serde_json::Value> = response.json().await?;
@@ -188,8 +186,9 @@ impl MinecraftInstaller {
                 continue;
             }
             
-            // Скачиваем мод
-            let download_url = format!("{}/{}", MODS_RAW_URL, name);
+            // URL-encode имя файла для скачивания
+            let encoded_name = name.replace(" ", "%20");
+            let download_url = format!("{}/{}", MODS_RAW_URL, encoded_name);
             let _ = self.download_file(&download_url, &mod_path).await;
         }
         
@@ -200,7 +199,6 @@ impl MinecraftInstaller {
         let shaderpacks_dir = self.game_dir.join("shaderpacks");
         fs::create_dir_all(&shaderpacks_dir)?;
         
-        // Получаем список шейдерпаков из GitHub API
         let response = self.client
             .get(SHADERPACKS_REPO_API)
             .header("User-Agent", "ByStep-Launcher")
@@ -216,20 +214,18 @@ impl MinecraftInstaller {
         for file in files {
             let name = file.get("name").and_then(|n| n.as_str()).unwrap_or("");
             
-            // Скачиваем только .zip файлы
             if !name.ends_with(".zip") {
                 continue;
             }
             
             let shaderpack_path = shaderpacks_dir.join(name);
             
-            // Пропускаем если шейдерпак уже скачан
             if shaderpack_path.exists() {
                 continue;
             }
             
-            // Скачиваем шейдерпак
-            let download_url = format!("{}/shaderpacks/{}", MODS_RAW_URL, name);
+            let encoded_name = name.replace(" ", "%20");
+            let download_url = format!("{}/shaderpacks/{}", MODS_RAW_URL, encoded_name);
             let _ = self.download_file(&download_url, &shaderpack_path).await;
         }
         
@@ -265,61 +261,9 @@ impl MinecraftInstaller {
                 continue;
             }
             
-            let download_url = format!("{}/resourcepacks/{}", MODS_RAW_URL, name);
+            let encoded_name = name.replace(" ", "%20");
+            let download_url = format!("{}/resourcepacks/{}", MODS_RAW_URL, encoded_name);
             let _ = self.download_file(&download_url, &pack_path).await;
-        }
-        
-        Ok(())
-    }
-    
-    pub async fn download_fancymenu_config(&self) -> Result<()> {
-        // Создаём папки для FancyMenu конфига
-        let config_dir = self.game_dir.join("config").join("fancymenu");
-        let assets_dir = config_dir.join("assets");
-        let customization_dir = config_dir.join("customization");
-        fs::create_dir_all(&assets_dir)?;
-        fs::create_dir_all(&customization_dir)?;
-        
-        // Скачиваем assets (гифка)
-        let response = self.client
-            .get(FANCYMENU_ASSETS_API)
-            .header("User-Agent", "ByStep-Launcher")
-            .send()
-            .await?;
-        
-        if response.status().is_success() {
-            let files: Vec<serde_json::Value> = response.json().await?;
-            for file in files {
-                let name = file.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                if name.is_empty() { continue; }
-                
-                let file_path = assets_dir.join(name);
-                if !file_path.exists() {
-                    let download_url = format!("{}/fancymenu/assets/{}", MODS_RAW_URL, name);
-                    let _ = self.download_file(&download_url, &file_path).await;
-                }
-            }
-        }
-        
-        // Скачиваем customization (layout файлы)
-        let response = self.client
-            .get(FANCYMENU_CUSTOMIZATION_API)
-            .header("User-Agent", "ByStep-Launcher")
-            .send()
-            .await?;
-        
-        if response.status().is_success() {
-            let files: Vec<serde_json::Value> = response.json().await?;
-            for file in files {
-                let name = file.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                if name.is_empty() { continue; }
-                
-                let file_path = customization_dir.join(name);
-                if !file_path.exists() {
-                    let download_url = format!("{}/fancymenu/customization/{}", MODS_RAW_URL, name);
-                    let _ = self.download_file(&download_url, &file_path).await;
-                }
-            }
         }
         
         Ok(())
