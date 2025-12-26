@@ -235,6 +235,16 @@ impl MinecraftLauncher {
                         let _ = output.send(Message::InstallProgress("Текстуры обновлены!".into(), 0.92)).await;
                     }
                     
+                    // Скачиваем конфиг FancyMenu (кастомный фон)
+                    let _ = output.send(Message::InstallProgress("Настройка меню...".into(), 0.93)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    
+                    if let Err(e) = installer.download_fancymenu_config().await {
+                        let _ = output.send(Message::InstallProgress(format!("Меню: {}", e), 0.94)).await;
+                    } else {
+                        let _ = output.send(Message::InstallProgress("Меню настроено!".into(), 0.94)).await;
+                    }
+                    
                     // Настраиваем шейдеры
                     let _ = output.send(Message::InstallProgress("Настройка шейдеров...".into(), 0.94)).await;
                     let _ = minecraft::configure_shaders(&game_dir, shaders_enabled);
