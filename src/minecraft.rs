@@ -171,14 +171,25 @@ impl MinecraftInstaller {
         
         let files: Vec<serde_json::Value> = response.json().await?;
         
-        for file in files {
-            let name = file.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            
-            // Скачиваем только .jar файлы
-            if !name.ends_with(".jar") {
-                continue;
+        // Собираем список модов с GitHub
+        let github_mods: Vec<String> = files.iter()
+            .filter_map(|f| f.get("name").and_then(|n| n.as_str()))
+            .filter(|n| n.ends_with(".jar"))
+            .map(|n| n.to_string())
+            .collect();
+        
+        // Удаляем моды которых нет на GitHub
+        if let Ok(entries) = fs::read_dir(&mods_dir) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                if file_name.ends_with(".jar") && !github_mods.contains(&file_name) {
+                    let _ = fs::remove_file(entry.path());
+                }
             }
-            
+        }
+        
+        // Скачиваем недостающие моды
+        for name in &github_mods {
             let mod_path = mods_dir.join(name);
             
             // Пропускаем если мод уже скачан
