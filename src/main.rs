@@ -5,12 +5,13 @@ mod minecraft;
 use iced::{
     Alignment, Border, Color, Element, Length, Shadow, Subscription, Task, Theme, Vector,
     widget::{button, column, container, row, slider, text, text_input, image, stack, Space, toggler},
-    window,
+    window, time,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use minecraft::{MinecraftInstaller, get_game_directory, build_launch_command};
 
@@ -20,6 +21,29 @@ const BG_CARD: Color = Color { r: 0.08, g: 0.08, b: 0.1, a: 0.85 };
 const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
+
+// Загружаем кадры GIF при компиляции
+fn load_gif_frames() -> Vec<image::Handle> {
+    use ::image::codecs::gif::GifDecoder;
+    use ::image::AnimationDecoder;
+    
+    let gif_data = include_bytes!("giphy.gif");
+    let cursor = std::io::Cursor::new(gif_data.as_slice());
+    
+    if let Ok(decoder) = GifDecoder::new(cursor) {
+        decoder.into_frames()
+            .filter_map(|f| f.ok())
+            .map(|frame| {
+                let rgba = frame.into_buffer();
+                let (w, h) = rgba.dimensions();
+                image::Handle::from_rgba(w, h, rgba.into_raw())
+            })
+            .collect()
+    } else {
+        // Fallback - статичная картинка
+        vec![image::Handle::from_bytes(include_bytes!("background.png").to_vec())]
+    }
+}
 
 pub fn main() -> iced::Result {
     let icon = load_icon();
@@ -81,6 +105,8 @@ struct MinecraftLauncher {
     launch_state: LaunchState,
     active_tab: Tab,
     game_running: Arc<AtomicBool>,
+    gif_frames: Vec<image::Handle>,
+    current_frame: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -99,11 +125,13 @@ enum Message {
     InstallProgress(String, f32),
     LaunchComplete(Result<(), String>),
     GameExited,
+    NextFrame,
 }
 
 impl MinecraftLauncher {
     fn new() -> (Self, Task<Message>) {
         let settings = Self::load_settings().unwrap_or_default();
+        let gif_frames = load_gif_frames();
         (
             Self {
                 nickname: settings.nickname,
@@ -112,6 +140,8 @@ impl MinecraftLauncher {
                 launch_state: LaunchState::Idle,
                 active_tab: Tab::Dashboard,
                 game_running: Arc::new(AtomicBool::new(false)),
+                gif_frames,
+                current_frame: 0,
             },
             Task::none(),
         )
@@ -156,17 +186,24 @@ impl MinecraftLauncher {
                 self.launch_state = LaunchState::Idle;
                 self.game_running.store(false, Ordering::SeqCst);
             }
+            Message::NextFrame => {
+                if !self.gif_frames.is_empty() {
+                    self.current_frame = (self.current_frame + 1) % self.gif_frames.len();
+                }
+            }
         }
         Task::none()
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        let gif_timer = time::every(Duration::from_millis(50)).map(|_| Message::NextFrame);
+        
         if self.game_running.load(Ordering::SeqCst) {
             let nickname = self.nickname.clone();
             let ram_gb = self.ram_gb;
             let shaders_enabled = self.shaders_enabled;
             
-            Subscription::run_with_id(
+            let game_sub = Subscription::run_with_id(
                 "game-launcher",
                 iced::stream::channel(100, move |mut output| async move {
                     use iced::futures::SinkExt;
@@ -286,14 +323,19 @@ impl MinecraftLauncher {
                         }
                     }
                 })
-            )
+            );
+            Subscription::batch([gif_timer, game_sub])
         } else {
-            Subscription::none()
+            gif_timer
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let bg_handle = image::Handle::from_bytes(include_bytes!("background.png").to_vec());
+        let bg_handle = if !self.gif_frames.is_empty() {
+            self.gif_frames[self.current_frame].clone()
+        } else {
+            image::Handle::from_bytes(include_bytes!("background.png").to_vec())
+        };
         let icon_handle = image::Handle::from_bytes(include_bytes!("icon.png").to_vec());
 
         let sidebar = container(
