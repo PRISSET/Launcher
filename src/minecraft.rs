@@ -21,6 +21,7 @@ const JAVA21_URL: &str = "https://github.com/adoptium/temurin21-binaries/release
 const MODS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents";
 const MODS_RAW_URL: &str = "https://raw.githubusercontent.com/PRISSET/mods/main";
 const SHADERPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/shaderpacks";
+const RESOURCEPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/resourcepacks";
 
 #[derive(Debug, Clone)]
 pub struct InstallProgress {
@@ -228,6 +229,42 @@ impl MinecraftInstaller {
             // Скачиваем шейдерпак
             let download_url = format!("{}/shaderpacks/{}", MODS_RAW_URL, name);
             let _ = self.download_file(&download_url, &shaderpack_path).await;
+        }
+        
+        Ok(())
+    }
+    
+    pub async fn download_resourcepacks(&self) -> Result<()> {
+        let resourcepacks_dir = self.game_dir.join("resourcepacks");
+        fs::create_dir_all(&resourcepacks_dir)?;
+        
+        let response = self.client
+            .get(RESOURCEPACKS_REPO_API)
+            .header("User-Agent", "ByStep-Launcher")
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            return Err(anyhow!("Не удалось получить список текстурпаков"));
+        }
+        
+        let files: Vec<serde_json::Value> = response.json().await?;
+        
+        for file in files {
+            let name = file.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            
+            if !name.ends_with(".zip") {
+                continue;
+            }
+            
+            let pack_path = resourcepacks_dir.join(name);
+            
+            if pack_path.exists() {
+                continue;
+            }
+            
+            let download_url = format!("{}/resourcepacks/{}", MODS_RAW_URL, name);
+            let _ = self.download_file(&download_url, &pack_path).await;
         }
         
         Ok(())
@@ -701,6 +738,7 @@ modelPart_left_pants_leg:true
 modelPart_right_pants_leg:true
 modelPart_hat:true
 mainHand:"right"
+resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip"]
 "#;
         
         fs::write(&options_path, options_content)?;
@@ -708,7 +746,35 @@ mainHand:"right"
         
         Ok(())
     }
+}
 
+/// Настраивает options.txt для включения/выключения шейдеров
+pub fn configure_shaders(game_dir: &Path, enable_shaders: bool) -> Result<()> {
+    let iris_config_dir = game_dir.join("config").join("iris.properties");
+    
+    // Создаём папку config если нет
+    if let Some(parent) = iris_config_dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    
+    let shaderpack = if enable_shaders {
+        "ComplementaryUnbound_r5.6.1.zip"
+    } else {
+        ""
+    };
+    
+    let iris_config = format!(
+        "shaderPack={}\nenableShaders={}\n",
+        shaderpack,
+        enable_shaders
+    );
+    
+    fs::write(&iris_config_dir, iris_config)?;
+    
+    Ok(())
+}
+
+impl MinecraftInstaller {
     fn maven_name_to_path(&self, name: &str) -> String {
         let parts: Vec<&str> = name.split(':').collect();
         if parts.len() >= 3 {

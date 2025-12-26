@@ -4,7 +4,7 @@ mod minecraft;
 
 use iced::{
     Alignment, Border, Color, Element, Length, Shadow, Subscription, Task, Theme, Vector,
-    widget::{button, column, container, row, slider, text, text_input, image, stack, Space},
+    widget::{button, column, container, row, slider, text, text_input, image, stack, Space, toggler},
     window,
 };
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,8 @@ fn load_icon() -> Option<window::Icon> {
 struct LauncherSettings {
     nickname: String,
     ram_gb: u32,
+    #[serde(default)]
+    shaders_enabled: bool,
 }
 
 impl Default for LauncherSettings {
@@ -52,6 +54,7 @@ impl Default for LauncherSettings {
         Self {
             nickname: String::new(),
             ram_gb: 4,
+            shaders_enabled: true,
         }
     }
 }
@@ -74,6 +77,7 @@ impl PartialEq for LaunchState {
 struct MinecraftLauncher {
     nickname: String,
     ram_gb: u32,
+    shaders_enabled: bool,
     launch_state: LaunchState,
     active_tab: Tab,
     game_running: Arc<AtomicBool>,
@@ -89,6 +93,7 @@ enum Tab {
 enum Message {
     NicknameChanged(String),
     RamChanged(u32),
+    ShadersToggled(bool),
     LaunchGame,
     SwitchTab(Tab),
     InstallProgress(String, f32),
@@ -103,6 +108,7 @@ impl MinecraftLauncher {
             Self {
                 nickname: settings.nickname,
                 ram_gb: settings.ram_gb,
+                shaders_enabled: settings.shaders_enabled,
                 launch_state: LaunchState::Idle,
                 active_tab: Tab::Dashboard,
                 game_running: Arc::new(AtomicBool::new(false)),
@@ -119,6 +125,10 @@ impl MinecraftLauncher {
             }
             Message::RamChanged(ram) => {
                 self.ram_gb = ram;
+                self.save_settings();
+            }
+            Message::ShadersToggled(enabled) => {
+                self.shaders_enabled = enabled;
                 self.save_settings();
             }
             Message::LaunchGame => {
@@ -154,6 +164,7 @@ impl MinecraftLauncher {
         if self.game_running.load(Ordering::SeqCst) {
             let nickname = self.nickname.clone();
             let ram_gb = self.ram_gb;
+            let shaders_enabled = self.shaders_enabled;
             
             Subscription::run_with_id(
                 "game-launcher",
@@ -205,22 +216,36 @@ impl MinecraftLauncher {
                     }
                     
                     // Скачиваем/обновляем шейдерпаки
-                    let _ = output.send(Message::InstallProgress("Проверка шейдеров...".into(), 0.88)).await;
+                    let _ = output.send(Message::InstallProgress("Проверка шейдеров...".into(), 0.86)).await;
                     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                     
                     if let Err(e) = installer.download_shaderpacks().await {
-                        let _ = output.send(Message::InstallProgress(format!("Шейдеры: {}", e), 0.9)).await;
+                        let _ = output.send(Message::InstallProgress(format!("Шейдеры: {}", e), 0.88)).await;
                     } else {
-                        let _ = output.send(Message::InstallProgress("Шейдеры обновлены!".into(), 0.9)).await;
+                        let _ = output.send(Message::InstallProgress("Шейдеры обновлены!".into(), 0.88)).await;
                     }
                     
+                    // Скачиваем/обновляем текстурпаки
+                    let _ = output.send(Message::InstallProgress("Проверка текстурпаков...".into(), 0.90)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    
+                    if let Err(e) = installer.download_resourcepacks().await {
+                        let _ = output.send(Message::InstallProgress(format!("Текстуры: {}", e), 0.92)).await;
+                    } else {
+                        let _ = output.send(Message::InstallProgress("Текстуры обновлены!".into(), 0.92)).await;
+                    }
+                    
+                    // Настраиваем шейдеры
+                    let _ = output.send(Message::InstallProgress("Настройка шейдеров...".into(), 0.94)).await;
+                    let _ = minecraft::configure_shaders(&game_dir, shaders_enabled);
+                    
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    let _ = output.send(Message::InstallProgress("Запуск игры...".into(), 0.95)).await;
+                    let _ = output.send(Message::InstallProgress("Запуск игры...".into(), 0.96)).await;
                     
                     // Создаём options.txt с русским языком если его нет
                     let options_path = game_dir.join("options.txt");
                     if !options_path.exists() {
-                        let options_content = "lang:ru_ru\n";
+                        let options_content = "lang:ru_ru\nresourcePacks:[\"vanilla\",\"file/Actually-3D-Stuff-1.21.zip\"]\n";
                         let _ = std::fs::write(&options_path, options_content);
                     }
                     
@@ -271,16 +296,30 @@ impl MinecraftLauncher {
                                 .height(80)
                                 .content_fit(iced::ContentFit::Cover)
                         )
+                        .width(80)
+                        .height(80)
                         .style(move |_| container::Style {
                             border: Border { radius: 40.0.into(), width: 3.0, color: ACCENT },
                             ..Default::default()
                         })
                         .clip(true),
                         Space::with_height(10),
-                        text(if self.nickname.is_empty() { "Гость" } else { &self.nickname })
-                            .size(18).style(move |_| text::Style { color: Some(TEXT_PRIMARY) }),
+                        container(
+                            text(if self.nickname.is_empty() { 
+                                "Гость".to_string() 
+                            } else { 
+                                let chars: Vec<char> = self.nickname.chars().collect();
+                                if chars.len() > 12 { 
+                                    chars[..12].iter().collect::<String>() + ".."
+                                } else { 
+                                    self.nickname.clone() 
+                                }
+                            })
+                            .size(16)
+                            .style(move |_| text::Style { color: Some(TEXT_PRIMARY) })
+                        ).width(Length::Fill).center_x(Length::Fill),
                         text("PREMIUM").size(10).color(ACCENT),
-                    ].spacing(5).align_x(Alignment::Center)
+                    ].spacing(5).align_x(Alignment::Center).width(Length::Fill)
                 ).width(Length::Fill).padding(iced::Padding { top: 20.0, right: 0.0, bottom: 30.0, left: 0.0 }),
 
                 sidebar_button("ГЛАВНАЯ", Tab::Dashboard, &self.active_tab),
@@ -413,8 +452,10 @@ impl MinecraftLauncher {
                         ].spacing(3),
                         Space::with_width(40),
                         column![
-                            text("МОДЫ").size(11).color(TEXT_SECONDARY),
-                            text("4 мода").size(14).color(TEXT_PRIMARY),
+                            text("ШЕЙДЕРЫ").size(11).color(TEXT_SECONDARY),
+                            toggler(self.shaders_enabled)
+                                .on_toggle(Message::ShadersToggled)
+                                .size(20)
                         ].spacing(3),
                         Space::with_width(Length::Fill),
 
@@ -507,6 +548,7 @@ impl MinecraftLauncher {
             let settings = LauncherSettings { 
                 nickname: self.nickname.clone(), 
                 ram_gb: self.ram_gb,
+                shaders_enabled: self.shaders_enabled,
             };
             if let Ok(json) = serde_json::to_string_pretty(&settings) {
                 let _ = std::fs::write(config_dir.join("settings.json"), json);
