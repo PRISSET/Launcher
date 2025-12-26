@@ -14,7 +14,6 @@ const FABRIC_LOADER_VERSION: &str = "0.17.2";
 const VERSION_MANIFEST_URL: &str = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
 const FABRIC_META_URL: &str = "https://meta.fabricmc.net";
 
-pub const MODS_SERVER_URL: &str = "https://your-server.com/mods";
 const JAVA21_URL: &str = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jre_x64_windows_hotspot_21.0.5_11.zip";
 
 // GitHub API для получения списка модов
