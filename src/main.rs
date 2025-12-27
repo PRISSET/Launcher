@@ -28,7 +28,7 @@ const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
 
-const CURRENT_VERSION: &str = "1.0.4";
+const CURRENT_VERSION: &str = "1.0.5";
 const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 
@@ -50,6 +50,27 @@ fn load_gif_frames() -> Vec<image::Handle> {
             .collect()
     } else {
         vec![image::Handle::from_bytes(include_bytes!("../background.png").to_vec())]
+    }
+}
+
+fn load_avatar_frames() -> Vec<image::Handle> {
+    use ::image::codecs::gif::GifDecoder;
+    use ::image::AnimationDecoder;
+    
+    let gif_data = include_bytes!("avatar.gif");
+    let cursor = std::io::Cursor::new(gif_data.as_slice());
+    
+    if let Ok(decoder) = GifDecoder::new(cursor) {
+        decoder.into_frames()
+            .filter_map(|f| f.ok())
+            .map(|frame| {
+                let rgba = frame.into_buffer();
+                let (w, h) = rgba.dimensions();
+                image::Handle::from_rgba(w, h, rgba.into_raw())
+            })
+            .collect()
+    } else {
+        vec![image::Handle::from_bytes(include_bytes!("icon.png").to_vec())]
     }
 }
 
@@ -100,6 +121,7 @@ struct PlayTimeStats {
 #[derive(Debug, Clone)]
 enum LaunchState {
     CheckingUpdate,
+    UpdateAvailable { version: String, download_url: String },
     Updating { progress: String },
     Idle,
     Installing { step: String, progress: f32 },
@@ -122,6 +144,7 @@ struct MinecraftLauncher {
     active_tab: Tab,
     game_running: Arc<AtomicBool>,
     gif_frames: Vec<image::Handle>,
+    avatar_frames: Vec<image::Handle>,
     current_frame: usize,
     update_checked: bool,
     play_stats: PlayTimeStats,
@@ -161,6 +184,8 @@ enum Message {
     UpdateStatus(UpdateResult),
     PlayTimeTick,
     ServerStatusUpdate(ServerStatus),
+    AcceptUpdate,
+    DeclineUpdate,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +202,7 @@ impl MinecraftLauncher {
         let settings = Self::load_settings().unwrap_or_default();
         let play_stats = Self::load_play_stats().unwrap_or_default();
         let gif_frames = load_gif_frames();
+        let avatar_frames = load_avatar_frames();
         
         let discord_client = Self::init_discord();
         
@@ -189,6 +215,7 @@ impl MinecraftLauncher {
                 active_tab: Tab::Dashboard,
                 game_running: Arc::new(AtomicBool::new(false)),
                 gif_frames,
+                avatar_frames,
                 current_frame: 0,
                 update_checked: false,
                 play_stats,
@@ -310,10 +337,10 @@ impl MinecraftLauncher {
                         self.update_discord_presence("В лаунчере", "Выбирает настройки");
                     }
                     UpdateResult::UpdateAvailable(version, url) => {
-                        self.launch_state = LaunchState::Updating { 
-                            progress: format!("Обновление до v{}...", version) 
+                        self.launch_state = LaunchState::UpdateAvailable { 
+                            version: version.clone(),
+                            download_url: url,
                         };
-                        return Task::perform(download_and_run_update(url), Message::UpdateStatus);
                     }
                     UpdateResult::Downloading(msg) => {
                         self.launch_state = LaunchState::Updating { progress: msg };
@@ -327,6 +354,18 @@ impl MinecraftLauncher {
                         eprintln!("Update error: {}", e);
                     }
                 }
+            }
+            Message::AcceptUpdate => {
+                if let LaunchState::UpdateAvailable { version, download_url } = self.launch_state.clone() {
+                    self.launch_state = LaunchState::Updating { 
+                        progress: format!("Скачивание v{}...", version) 
+                    };
+                    return Task::perform(download_and_run_update(download_url), Message::UpdateStatus);
+                }
+            }
+            Message::DeclineUpdate => {
+                self.launch_state = LaunchState::Idle;
+                self.update_discord_presence("В лаунчере", "Выбирает настройки");
             }
             Message::PlayTimeTick => {
                 if matches!(self.launch_state, LaunchState::Playing) {
@@ -482,14 +521,19 @@ impl MinecraftLauncher {
         } else {
             image::Handle::from_bytes(include_bytes!("../background.png").to_vec())
         };
-        let icon_handle = image::Handle::from_bytes(include_bytes!("icon.png").to_vec());
+        
+        let avatar_handle = if !self.avatar_frames.is_empty() {
+            self.avatar_frames[self.current_frame % self.avatar_frames.len()].clone()
+        } else {
+            image::Handle::from_bytes(include_bytes!("icon.png").to_vec())
+        };
 
         let sidebar = container(
             column![
                 container(
                     column![
                         container(
-                            image(icon_handle.clone())
+                            image(avatar_handle)
                                 .width(80)
                                 .height(80)
                                 .content_fit(iced::ContentFit::Cover)
@@ -497,28 +541,47 @@ impl MinecraftLauncher {
                         .width(80)
                         .height(80)
                         .style(move |_| container::Style {
-                            border: Border { radius: 40.0.into(), width: 3.0, color: ACCENT },
+                            border: Border { 
+                                radius: 8.0.into(), 
+                                width: 2.0, 
+                                color: Color { r: 0.3, g: 0.3, b: 0.3, a: 1.0 }
+                            },
                             ..Default::default()
-                        })
-                        .clip(true),
-                        Space::with_height(10),
-                        container(
-                            text(if self.nickname.is_empty() { 
-                                "Гость".to_string() 
+                        }),
+                        Space::with_height(15),
+                        text(if self.nickname.is_empty() { 
+                            "Гость".to_string() 
+                        } else { 
+                            let chars: Vec<char> = self.nickname.chars().collect();
+                            if chars.len() > 12 { 
+                                chars[..12].iter().collect::<String>() + ".."
                             } else { 
-                                let chars: Vec<char> = self.nickname.chars().collect();
-                                if chars.len() > 12 { 
-                                    chars[..12].iter().collect::<String>() + ".."
-                                } else { 
-                                    self.nickname.clone() 
-                                }
-                            })
-                            .size(16)
-                            .style(move |_| text::Style { color: Some(TEXT_PRIMARY) })
-                        ).width(Length::Fill).center_x(Length::Fill),
-                        text("PREMIUM").size(10).color(ACCENT),
-                    ].spacing(5).align_x(Alignment::Center).width(Length::Fill)
-                ).width(Length::Fill).padding(iced::Padding { top: 20.0, right: 0.0, bottom: 30.0, left: 0.0 }),
+                                self.nickname.clone() 
+                            }
+                        })
+                        .size(18)
+                        .style(move |_| text::Style { color: Some(TEXT_PRIMARY) }),
+                        Space::with_height(6),
+                        container(
+                            text("PREMIUM").size(9)
+                        )
+                        .padding([4, 14])
+                        .style(move |_| container::Style {
+                            background: Some(iced::Background::Color(ACCENT)),
+                            border: Border { radius: 12.0.into(), ..Default::default() },
+                            shadow: Shadow {
+                                color: Color { r: 1.0, g: 0.2, b: 0.2, a: 0.7 },
+                                offset: Vector::new(0.0, 0.0),
+                                blur_radius: 12.0,
+                            },
+                            ..Default::default()
+                        }),
+                    ].spacing(0).align_x(Alignment::Center).width(Length::Fill)
+                )
+                .width(Length::Fill)
+                .padding(iced::Padding { top: 25.0, right: 15.0, bottom: 20.0, left: 15.0 }),
+                
+                Space::with_height(15),
 
                 sidebar_button("ГЛАВНАЯ", Tab::Dashboard, &self.active_tab),
                 sidebar_button("СТАТИСТИКА", Tab::Statistics, &self.active_tab),
@@ -526,19 +589,35 @@ impl MinecraftLauncher {
                 
                 Space::with_height(Length::Fill),
                 
-                text("ByStep v1.0.4").size(10).color(Color { r: 0.3, g: 0.3, b: 0.3, a: 1.0 }),
+                text("ByStep v1.0.5").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
             ]
-            .padding(25)
-            .spacing(8)
+            .padding(18)
+            .spacing(6)
         )
-        .width(Length::FillPortion(1))
+        .width(200)
         .height(Length::Fill)
         .style(move |_| container::Style {
-            background: Some(iced::Background::Color(BG_SIDEBAR)),
+            background: Some(iced::Background::Color(Color { r: 0.05, g: 0.05, b: 0.08, a: 0.75 })),
+            border: Border {
+                radius: 0.0.into(),
+                width: 1.0,
+                color: Color { r: 1.0, g: 1.0, b: 1.0, a: 0.1 },
+            },
             ..Default::default()
         });
 
-        let content_area = stack![
+        let content_area = container(
+            match self.active_tab {
+                Tab::Dashboard => self.dashboard_view(),
+                Tab::Statistics => self.statistics_view(),
+                Tab::Settings => self.settings_view(),
+            }
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(40);
+
+        let main_content = stack![
             image(bg_handle)
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -548,31 +627,26 @@ impl MinecraftLauncher {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .style(move |_| container::Style {
-                    background: Some(iced::Background::Color(Color { r: 0.0, g: 0.0, b: 0.02, a: 0.55 })),
+                    background: Some(iced::Background::Color(Color { r: 0.0, g: 0.0, b: 0.02, a: 0.5 })),
                     ..Default::default()
                 }),
 
-            container(
-                match self.active_tab {
-                    Tab::Dashboard => self.dashboard_view(),
-                    Tab::Statistics => self.statistics_view(),
-                    Tab::Settings => self.settings_view(),
-                }
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(40)
+            row![
+                sidebar,
+                content_area
+            ]
         ];
 
-        row![
-            sidebar,
-            container(content_area).width(Length::FillPortion(4))
-        ].into()
+        container(main_content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     fn dashboard_view(&self) -> Element<'_, Message> {
         let (button_text, button_enabled) = match &self.launch_state {
             LaunchState::CheckingUpdate => ("ПРОВЕРКА...", false),
+            LaunchState::UpdateAvailable { .. } => ("ИГРАТЬ", false),
             LaunchState::Updating { .. } => ("ОБНОВЛЕНИЕ...", false),
             LaunchState::Idle => ("ИГРАТЬ", !self.nickname.is_empty()),
             LaunchState::Installing { .. } => ("УСТАНОВКА...", false),
@@ -590,6 +664,64 @@ impl MinecraftLauncher {
                 .style(move |_| container::Style {
                     background: Some(iced::Background::Color(BG_CARD)),
                     border: Border { radius: 8.0.into(), ..Default::default() },
+                    ..Default::default()
+                })
+                .width(Length::Fill)
+                .into()
+            }
+            LaunchState::UpdateAvailable { version, .. } => {
+                container(
+                    column![
+                        text(format!("Доступно обновление v{}", version)).size(16).color(ACCENT),
+                        Space::with_height(10),
+                        text("Хотите обновить сейчас?").size(13).color(TEXT_SECONDARY),
+                        Space::with_height(15),
+                        row![
+                            button(
+                                container(text("Обновить").size(14)).padding([8, 20])
+                            )
+                            .on_press(Message::AcceptUpdate)
+                            .style(move |_, status| {
+                                let hovered = status == button::Status::Hovered;
+                                button::Style {
+                                    background: Some(iced::Background::Color(
+                                        if hovered { Color { r: 0.95, g: 0.25, b: 0.25, a: 1.0 } } 
+                                        else { ACCENT }
+                                    )),
+                                    text_color: Color::WHITE,
+                                    border: Border { radius: 8.0.into(), ..Default::default() },
+                                    shadow: Shadow {
+                                        color: Color { r: 1.0, g: 0.2, b: 0.2, a: 0.7 },
+                                        offset: Vector::new(0.0, 0.0),
+                                        blur_radius: 15.0,
+                                    },
+                                    ..Default::default()
+                                }
+                            }),
+                            Space::with_width(10),
+                            button(
+                                container(text("Позже").size(14)).padding([8, 20])
+                            )
+                            .on_press(Message::DeclineUpdate)
+                            .style(move |_, status| {
+                                let hovered = status == button::Status::Hovered;
+                                button::Style {
+                                    background: Some(iced::Background::Color(
+                                        if hovered { Color { r: 0.25, g: 0.25, b: 0.28, a: 1.0 } } 
+                                        else { Color { r: 0.15, g: 0.15, b: 0.18, a: 1.0 } }
+                                    )),
+                                    text_color: TEXT_SECONDARY,
+                                    border: Border { radius: 8.0.into(), width: 1.0, color: Color { r: 1.0, g: 1.0, b: 1.0, a: 0.1 } },
+                                    ..Default::default()
+                                }
+                            }),
+                        ]
+                    ].align_x(Alignment::Center)
+                )
+                .padding(20)
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(BG_CARD)),
+                    border: Border { radius: 10.0.into(), width: 1.0, color: ACCENT },
                     ..Default::default()
                 })
                 .width(Length::Fill)
@@ -783,9 +915,9 @@ impl MinecraftLauncher {
                                 border: Border { radius: 10.0.into(), width: 0.0, color: Color::TRANSPARENT },
                                 shadow: if button_enabled {
                                     Shadow {
-                                        color: Color { r: 0.85, g: 0.15, b: 0.15, a: 0.4 },
-                                        offset: Vector::new(0.0, 4.0),
-                                        blur_radius: 20.0,
+                                        color: Color { r: 1.0, g: 0.2, b: 0.2, a: 0.8 },
+                                        offset: Vector::new(0.0, 0.0),
+                                        blur_radius: 25.0,
                                     }
                                 } else {
                                     Shadow::default()
@@ -1042,15 +1174,23 @@ fn sidebar_button<'a>(label: &'a str, tab: Tab, active_tab: &Tab) -> Element<'a,
         let hovering = status == button::Status::Hovered;
         button::Style {
             background: if is_active {
-                Some(iced::Background::Color(Color { r: 0.85, g: 0.15, b: 0.15, a: 0.2 }))
+                Some(iced::Background::Color(ACCENT))
             } else if hovering {
                 Some(iced::Background::Color(Color { r: 1.0, g: 1.0, b: 1.0, a: 0.05 }))
             } else {
                 None
             },
-            text_color: if is_active { ACCENT } else { TEXT_SECONDARY },
+            text_color: if is_active { Color::WHITE } else { TEXT_SECONDARY },
             border: Border { radius: 10.0.into(), width: 0.0, color: Color::TRANSPARENT },
-            shadow: Shadow::default(),
+            shadow: if is_active {
+                Shadow {
+                    color: Color { r: 1.0, g: 0.2, b: 0.2, a: 0.6 },
+                    offset: Vector::new(0.0, 0.0),
+                    blur_radius: 15.0,
+                }
+            } else {
+                Shadow::default()
+            },
             ..Default::default()
         }
     })
