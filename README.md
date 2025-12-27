@@ -1,54 +1,71 @@
+<div align="center">
+
+<img src="src/icon.png" alt="ByStep Launcher" width="150" height="150">
+
 # ByStep Launcher
 
-<p align="center">
-  <img src="src/icon.png" alt="ByStep Launcher" width="128" height="128">
-</p>
+### Custom Minecraft Launcher
 
-<p align="center">
-  <b>Custom Minecraft launcher for ByStep server</b>
-</p>
+<br>
+
+[![Download](https://img.shields.io/badge/Download-Latest%20Release-red?style=for-the-badge&logo=windows)](https://github.com/PRISSET/Launcher/releases/latest)
+[![Version](https://img.shields.io/github/v/release/PRISSET/Launcher?style=for-the-badge&label=Version&color=blue)](https://github.com/PRISSET/Launcher/releases)
+[![Downloads](https://img.shields.io/github/downloads/PRISSET/Launcher/total?style=for-the-badge&label=Downloads&color=green)](https://github.com/PRISSET/Launcher/releases)
+
+<br>
+
+[English](#english) | [Русский](#russian)
+
+<br>
 
 ---
 
-## English
+</div>
 
-### About
+<a name="english"></a>
 
-ByStep Launcher is a custom Minecraft launcher designed specifically for the ByStep server. It provides automatic game installation, mod management, and seamless server connection.
+## About
 
-### Features
+ByStep Launcher is a modern, feature-rich Minecraft launcher built with Rust and Iced framework. Designed for seamless gameplay experience on the ByStep server with automatic mod management and beautiful animated interface.
 
-- Automatic Minecraft 1.21.1 installation with Fabric loader
-- Auto-download and update of mods from GitHub repository
-- Shader and resource pack management
-- Built-in Java 21 installation
-- Play time statistics (daily, weekly, monthly)
-- Discord Rich Presence integration
-- Auto-update system
-- Animated GIF background
-- Russian language by default
+<br>
 
-### System Requirements
+## Features
 
-- Windows 10/11
-- 4 GB RAM minimum (8 GB recommended)
-- Internet connection
+| Feature | Description |
+|---------|-------------|
+| Auto Installation | Minecraft 1.21.1 with Fabric loader |
+| Mod Management | Automatic download and sync from GitHub |
+| Shaders | Built-in shader pack support with Iris |
+| Java Runtime | Automatic Java 21 installation |
+| Play Statistics | Track your daily, weekly, and monthly playtime |
+| Discord Integration | Rich Presence shows your activity |
+| Auto Updates | Seamless launcher updates |
+| Animated UI | Beautiful GIF background support |
 
-### Installation
+<br>
 
-1. Download the latest release from [Releases](https://github.com/PRISSET/Launcher/releases)
+## Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| OS | Windows 10 | Windows 11 |
+| RAM | 4 GB | 8 GB |
+| Storage | 2 GB | 4 GB |
+| Network | Required | Required |
+
+<br>
+
+## Quick Start
+
+1. Download the installer from the button above
 2. Run `ByStep-Launcher-Setup.exe`
-3. Follow the installation wizard
-4. Launch the application and enter your nickname
+3. Enter your nickname
+4. Click Play
 
-### Usage
+<br>
 
-1. Enter your nickname in the Settings tab
-2. Adjust RAM allocation if needed
-3. Toggle shaders on/off
-4. Click "Play" button
-
-### Build from Source
+## Build
 
 ```bash
 git clone https://github.com/PRISSET/Launcher.git
@@ -56,47 +73,60 @@ cd Launcher
 cargo build --release
 ```
 
+<br>
+
 ---
 
-## Russian
+<a name="russian"></a>
 
-### О проекте
+<div align="center">
 
-ByStep Launcher — кастомный лаунчер Minecraft, разработанный специально для сервера ByStep. Обеспечивает автоматическую установку игры, управление модами и подключение к серверу.
+## Русский
 
-### Возможности
+</div>
 
-- Автоматическая установка Minecraft 1.21.1 с Fabric
-- Автозагрузка и обновление модов из GitHub репозитория
-- Управление шейдерами и ресурспаками
-- Встроенная установка Java 21
-- Статистика игрового времени (день, неделя, месяц)
-- Интеграция с Discord Rich Presence
-- Система автообновления
-- Анимированный GIF фон
-- Русский язык по умолчанию
+## О проекте
 
-### Системные требования
+ByStep Launcher — современный лаунчер Minecraft, созданный на Rust с использованием фреймворка Iced. Разработан для комфортной игры на сервере ByStep с автоматическим управлением модами и красивым анимированным интерфейсом.
 
-- Windows 10/11
-- Минимум 4 ГБ ОЗУ (рекомендуется 8 ГБ)
-- Подключение к интернету
+<br>
 
-### Установка
+## Возможности
 
-1. Скачайте последний релиз из [Releases](https://github.com/PRISSET/Launcher/releases)
+| Функция | Описание |
+|---------|----------|
+| Автоустановка | Minecraft 1.21.1 с Fabric |
+| Управление модами | Автозагрузка и синхронизация с GitHub |
+| Шейдеры | Встроенная поддержка шейдеров через Iris |
+| Java | Автоматическая установка Java 21 |
+| Статистика | Отслеживание времени игры по дням, неделям, месяцам |
+| Discord | Rich Presence показывает вашу активность |
+| Автообновление | Бесшовное обновление лаунчера |
+| Анимированный UI | Поддержка GIF фона |
+
+<br>
+
+## Требования
+
+| Компонент | Минимум | Рекомендуется |
+|-----------|---------|---------------|
+| ОС | Windows 10 | Windows 11 |
+| ОЗУ | 4 ГБ | 8 ГБ |
+| Диск | 2 ГБ | 4 ГБ |
+| Сеть | Требуется | Требуется |
+
+<br>
+
+## Быстрый старт
+
+1. Скачайте установщик по кнопке выше
 2. Запустите `ByStep-Launcher-Setup.exe`
-3. Следуйте инструкциям установщика
-4. Запустите приложение и введите никнейм
+3. Введите никнейм
+4. Нажмите Играть
 
-### Использование
+<br>
 
-1. Введите никнейм во вкладке Настройки
-2. Настройте выделение ОЗУ при необходимости
-3. Включите или выключите шейдеры
-4. Нажмите кнопку "Играть"
-
-### Сборка из исходников
+## Сборка
 
 ```bash
 git clone https://github.com/PRISSET/Launcher.git
@@ -104,12 +134,12 @@ cd Launcher
 cargo build --release
 ```
 
+<br>
+
 ---
 
-## License
+<div align="center">
 
-This project is proprietary software for ByStep server.
+Made by PRISSET
 
-## Author
-
-PRISSET
+</div>
