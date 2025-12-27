@@ -9,7 +9,7 @@ Custom Minecraft launcher for ByStep server
 <br>
 
 [![Download](https://img.shields.io/badge/Download-Latest%20Release-red?style=for-the-badge&logo=windows)](https://github.com/PRISSET/Launcher/releases/latest)
-[![Version](https://img.shields.io/github/v/release/PRISSET/Launcher?style=for-the-badge&label=Version&color=blue)](https://github.com/PRISSET/Launcher/releases)
+[![Version](https://img.shields.io/github/v/release/PRISSET/Launcher?style=for-the-badge&label=Version&color=blue&cacheSeconds=60)](https://github.com/PRISSET/Launcher/releases)
 [![Downloads](https://img.shields.io/github/downloads/PRISSET/Launcher/total?style=for-the-badge&label=Downloads&color=green)](https://github.com/PRISSET/Launcher/releases)
 
 <br>
