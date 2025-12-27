@@ -28,7 +28,7 @@ const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
 
-const CURRENT_VERSION: &str = "1.0.3";
+const CURRENT_VERSION: &str = "1.0.4";
 const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 
@@ -128,6 +128,15 @@ struct MinecraftLauncher {
     current_session_seconds: u64,
     discord_client: Arc<Mutex<Option<DiscordIpcClient>>>,
     game_start_time: Option<i64>,
+    server_status: ServerStatus,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ServerStatus {
+    online: bool,
+    players_online: u32,
+    players_max: u32,
+    player_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,6 +160,7 @@ enum Message {
     CheckUpdate,
     UpdateStatus(UpdateResult),
     PlayTimeTick,
+    ServerStatusUpdate(ServerStatus),
 }
 
 #[derive(Debug, Clone)]
@@ -185,8 +195,12 @@ impl MinecraftLauncher {
                 current_session_seconds: 0,
                 discord_client,
                 game_start_time: None,
+                server_status: ServerStatus::default(),
             },
-            Task::perform(check_for_updates(), Message::UpdateStatus),
+            Task::batch([
+                Task::perform(check_for_updates(), Message::UpdateStatus),
+                Task::perform(fetch_server_status(), Message::ServerStatusUpdate),
+            ]),
         )
     }
     
@@ -325,6 +339,9 @@ impl MinecraftLauncher {
                     }
                 }
             }
+            Message::ServerStatusUpdate(status) => {
+                self.server_status = status;
+            }
         }
         Task::none()
     }
@@ -332,6 +349,17 @@ impl MinecraftLauncher {
     fn subscription(&self) -> Subscription<Message> {
         let gif_timer = time::every(Duration::from_millis(50)).map(|_| Message::NextFrame);
         let play_timer = time::every(Duration::from_secs(1)).map(|_| Message::PlayTimeTick);
+        let server_status_timer = Subscription::run_with_id(
+            "server-status",
+            iced::stream::channel(10, |mut output| async move {
+                use iced::futures::SinkExt;
+                loop {
+                    let status = fetch_server_status().await;
+                    let _ = output.send(Message::ServerStatusUpdate(status)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                }
+            })
+        );
         
         if self.game_running.load(Ordering::SeqCst) {
             let nickname = self.nickname.clone();
@@ -442,9 +470,9 @@ impl MinecraftLauncher {
                     }
                 })
             );
-            Subscription::batch([gif_timer, game_sub, play_timer])
+            Subscription::batch([gif_timer, game_sub, play_timer, server_status_timer])
         } else {
-            gif_timer
+            Subscription::batch([gif_timer, server_status_timer])
         }
     }
 
@@ -498,7 +526,7 @@ impl MinecraftLauncher {
                 
                 Space::with_height(Length::Fill),
                 
-                text("ByStep v1.0.3").size(10).color(Color { r: 0.3, g: 0.3, b: 0.3, a: 1.0 }),
+                text("ByStep v1.0.4").size(10).color(Color { r: 0.3, g: 0.3, b: 0.3, a: 1.0 }),
             ]
             .padding(25)
             .spacing(8)
@@ -657,6 +685,50 @@ impl MinecraftLauncher {
             }
         });
 
+        let server_status_widget = container(
+            column![
+                row![
+                    container(
+                        Space::new(8, 8)
+                    ).style(move |_| container::Style {
+                        background: Some(iced::Background::Color(
+                            if self.server_status.online { Color { r: 0.2, g: 0.8, b: 0.2, a: 1.0 } }
+                            else { Color { r: 0.8, g: 0.2, b: 0.2, a: 1.0 } }
+                        )),
+                        border: Border { radius: 4.0.into(), ..Default::default() },
+                        ..Default::default()
+                    }),
+                    Space::with_width(10),
+                    text(if self.server_status.online { "СЕРВЕР ОНЛАЙН" } else { "СЕРВЕР ОФЛАЙН" })
+                        .size(12)
+                        .color(TEXT_SECONDARY),
+                    Space::with_width(Length::Fill),
+                    text(format!("{}/{}", self.server_status.players_online, self.server_status.players_max))
+                        .size(14)
+                        .color(if self.server_status.online { ACCENT } else { TEXT_SECONDARY }),
+                ].align_y(Alignment::Center),
+                if !self.server_status.player_names.is_empty() {
+                    Element::from(
+                        column![
+                            Space::with_height(8),
+                            text(self.server_status.player_names.join(", "))
+                                .size(12)
+                                .color(TEXT_SECONDARY)
+                        ]
+                    )
+                } else {
+                    Element::from(Space::with_height(0))
+                }
+            ]
+        )
+        .padding(15)
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(BG_CARD)),
+            border: Border { radius: 10.0.into(), ..Default::default() },
+            ..Default::default()
+        })
+        .width(Length::Fill);
+
         column![
             row![
                 column![
@@ -668,6 +740,8 @@ impl MinecraftLauncher {
             ].align_y(Alignment::Start),
 
             Space::with_height(20),
+            server_status_widget,
+            Space::with_height(10),
             status_widget,
             Space::with_height(Length::Fill),
 
@@ -1058,4 +1132,134 @@ async fn download_and_run_update(url: String) -> UpdateResult {
     }
     
     UpdateResult::Downloaded(installer_path)
+}
+
+async fn fetch_server_status() -> ServerStatus {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    
+    let mut status = ServerStatus::default();
+    
+    let stream = match TcpStream::connect_timeout(
+        &"144.31.169.7:25565".parse().unwrap(),
+        Duration::from_secs(5)
+    ) {
+        Ok(s) => s,
+        Err(_) => return status,
+    };
+    
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    
+    let mut stream = stream;
+    
+    let mut handshake = Vec::new();
+    handshake.push(0x00);
+    write_varint(&mut handshake, 767);
+    write_string(&mut handshake, "144.31.169.7");
+    handshake.extend_from_slice(&25565u16.to_be_bytes());
+    write_varint(&mut handshake, 1);
+    
+    let mut packet = Vec::new();
+    write_varint(&mut packet, handshake.len() as i32);
+    packet.extend(handshake);
+    
+    if stream.write_all(&packet).is_err() {
+        return status;
+    }
+    
+    let status_request = vec![0x01, 0x00];
+    if stream.write_all(&status_request).is_err() {
+        return status;
+    }
+    
+    let mut length_buf = [0u8; 5];
+    let mut length_bytes = 0;
+    for i in 0..5 {
+        if stream.read_exact(&mut length_buf[i..i+1]).is_err() {
+            return status;
+        }
+        length_bytes += 1;
+        if length_buf[i] & 0x80 == 0 {
+            break;
+        }
+    }
+    
+    let (packet_length, _) = read_varint(&length_buf[..length_bytes]);
+    if packet_length <= 0 || packet_length > 65535 {
+        return status;
+    }
+    
+    let mut response_data = vec![0u8; packet_length as usize];
+    if stream.read_exact(&mut response_data).is_err() {
+        return status;
+    }
+    
+    let (_, id_len) = read_varint(&response_data);
+    let (json_len, json_len_size) = read_varint(&response_data[id_len..]);
+    let json_start = id_len + json_len_size;
+    let json_end = json_start + json_len as usize;
+    
+    if json_end > response_data.len() {
+        return status;
+    }
+    
+    let json_str = match std::str::from_utf8(&response_data[json_start..json_end]) {
+        Ok(s) => s,
+        Err(_) => return status,
+    };
+    
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
+        status.online = true;
+        
+        if let Some(players) = json.get("players") {
+            status.players_online = players.get("online").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            status.players_max = players.get("max").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            
+            if let Some(sample) = players.get("sample").and_then(|v| v.as_array()) {
+                status.player_names = sample.iter()
+                    .filter_map(|p| p.get("name").and_then(|n| n.as_str()))
+                    .map(|s| s.to_string())
+                    .collect();
+            }
+        }
+    }
+    
+    status
+}
+
+fn write_varint(buf: &mut Vec<u8>, mut value: i32) {
+    loop {
+        let mut byte = (value & 0x7F) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        buf.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+fn write_string(buf: &mut Vec<u8>, s: &str) {
+    write_varint(buf, s.len() as i32);
+    buf.extend_from_slice(s.as_bytes());
+}
+
+fn read_varint(data: &[u8]) -> (i32, usize) {
+    let mut result = 0i32;
+    let mut shift = 0;
+    let mut bytes_read = 0;
+    
+    for &byte in data {
+        bytes_read += 1;
+        result |= ((byte & 0x7F) as i32) << shift;
+        if byte & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+    }
+    
+    (result, bytes_read)
 }
