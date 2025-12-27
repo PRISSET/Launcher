@@ -10,7 +10,7 @@ use std::fs;
 use std::process::Stdio;
 
 const MINECRAFT_VERSION: &str = "1.21.1";
-const FABRIC_LOADER_VERSION: &str = "0.17.2";
+const FABRIC_LOADER_VERSION: &str = "0.18.1";
 const VERSION_MANIFEST_URL: &str = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
 const FABRIC_META_URL: &str = "https://meta.fabricmc.net";
 
