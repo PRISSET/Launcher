@@ -18,6 +18,7 @@ const JAVA21_URL: &str = "https://github.com/adoptium/temurin21-binaries/release
 
 const MODS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents";
 const MODS_RAW_URL: &str = "https://raw.githubusercontent.com/PRISSET/mods/main";
+const MODS_JSON_URL: &str = "https://raw.githubusercontent.com/PRISSET/mods/main/mods.json";
 const SHADERPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/shaderpacks";
 const RESOURCEPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/resourcepacks";
 
@@ -25,6 +26,13 @@ const RESOURCEPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/
 pub struct InstallProgress {
     pub step: String,
     pub progress: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModsConfig {
+    mods: Vec<String>,
+    resourcepacks: Vec<String>,
+    shaderpacks: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -157,7 +165,7 @@ impl MinecraftInstaller {
         fs::create_dir_all(&mods_dir)?;
         
         let response = self.client
-            .get(MODS_REPO_API)
+            .get(MODS_JSON_URL)
             .header("User-Agent", "ByStep-Launcher")
             .send()
             .await?;
@@ -166,24 +174,18 @@ impl MinecraftInstaller {
             return Err(anyhow!("Не удалось получить список модов: {}", response.status()));
         }
         
-        let files: Vec<serde_json::Value> = response.json().await?;
-        
-        let github_mods: Vec<String> = files.iter()
-            .filter_map(|f| f.get("name").and_then(|n| n.as_str()))
-            .filter(|n| n.ends_with(".jar"))
-            .map(|n| n.to_string())
-            .collect();
+        let config: ModsConfig = response.json().await?;
         
         if let Ok(entries) = fs::read_dir(&mods_dir) {
             for entry in entries.flatten() {
                 let file_name = entry.file_name().to_string_lossy().to_string();
-                if file_name.ends_with(".jar") && !github_mods.contains(&file_name) {
+                if file_name.ends_with(".jar") && !config.mods.contains(&file_name) {
                     let _ = fs::remove_file(entry.path());
                 }
             }
         }
         
-        for name in &github_mods {
+        for name in &config.mods {
             let mod_path = mods_dir.join(name);
             
             if mod_path.exists() {
@@ -203,7 +205,7 @@ impl MinecraftInstaller {
         fs::create_dir_all(&shaderpacks_dir)?;
         
         let response = self.client
-            .get(SHADERPACKS_REPO_API)
+            .get(MODS_JSON_URL)
             .header("User-Agent", "ByStep-Launcher")
             .send()
             .await?;
@@ -212,15 +214,9 @@ impl MinecraftInstaller {
             return Err(anyhow!("Не удалось получить список шейдерпаков"));
         }
         
-        let files: Vec<serde_json::Value> = response.json().await?;
+        let config: ModsConfig = response.json().await?;
         
-        for file in files {
-            let name = file.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            
-            if !name.ends_with(".zip") {
-                continue;
-            }
-            
+        for name in &config.shaderpacks {
             let shaderpack_path = shaderpacks_dir.join(name);
             
             if shaderpack_path.exists() {
@@ -240,7 +236,7 @@ impl MinecraftInstaller {
         fs::create_dir_all(&resourcepacks_dir)?;
         
         let response = self.client
-            .get(RESOURCEPACKS_REPO_API)
+            .get(MODS_JSON_URL)
             .header("User-Agent", "ByStep-Launcher")
             .send()
             .await?;
@@ -249,15 +245,9 @@ impl MinecraftInstaller {
             return Err(anyhow!("Не удалось получить список текстурпаков"));
         }
         
-        let files: Vec<serde_json::Value> = response.json().await?;
+        let config: ModsConfig = response.json().await?;
         
-        for file in files {
-            let name = file.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            
-            if !name.ends_with(".zip") {
-                continue;
-            }
-            
+        for name in &config.resourcepacks {
             let pack_path = resourcepacks_dir.join(name);
             
             if pack_path.exists() {

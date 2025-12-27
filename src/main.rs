@@ -28,7 +28,7 @@ const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
 
-const CURRENT_VERSION: &str = "1.0.6";
+const CURRENT_VERSION: &str = "1.0.7";
 const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 
@@ -152,6 +152,8 @@ struct MinecraftLauncher {
     discord_client: Arc<Mutex<Option<DiscordIpcClient>>>,
     game_start_time: Option<i64>,
     server_status: ServerStatus,
+    crash_count: u32,
+    show_crash_dialog: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -179,6 +181,7 @@ enum Message {
     InstallProgress(String, f32),
     LaunchComplete(Result<(), String>),
     GameExited,
+    GameCrashed,
     NextFrame,
     CheckUpdate,
     UpdateStatus(UpdateResult),
@@ -186,6 +189,8 @@ enum Message {
     ServerStatusUpdate(ServerStatus),
     AcceptUpdate,
     DeclineUpdate,
+    ReinstallGame,
+    DismissCrashDialog,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +228,8 @@ impl MinecraftLauncher {
                 discord_client,
                 game_start_time: None,
                 server_status: ServerStatus::default(),
+                crash_count: 0,
+                show_crash_dialog: false,
             },
             Task::batch([
                 Task::perform(check_for_updates(), Message::UpdateStatus),
@@ -318,7 +325,30 @@ impl MinecraftLauncher {
                 self.save_play_stats();
                 self.current_session_seconds = 0;
                 self.game_start_time = None;
+                self.crash_count = 0;
                 self.update_discord_presence("В лаунчере", "Выбирает настройки");
+            }
+            Message::GameCrashed => {
+                self.launch_state = LaunchState::Idle;
+                self.game_running.store(false, Ordering::SeqCst);
+                self.current_session_seconds = 0;
+                self.game_start_time = None;
+                self.crash_count += 1;
+                if self.crash_count >= 2 {
+                    self.show_crash_dialog = true;
+                }
+                self.update_discord_presence("В лаунчере", "Выбирает настройки");
+            }
+            Message::ReinstallGame => {
+                self.show_crash_dialog = false;
+                self.crash_count = 0;
+                if let Some(game_dir) = Self::get_game_data_dir() {
+                    let _ = std::fs::remove_dir_all(&game_dir);
+                }
+                self.launch_state = LaunchState::Idle;
+            }
+            Message::DismissCrashDialog => {
+                self.show_crash_dialog = false;
             }
             Message::NextFrame => {
                 if !self.gif_frames.is_empty() {
@@ -505,11 +535,20 @@ impl MinecraftLauncher {
                                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                                     let _ = output.send(Message::LaunchComplete(Ok(()))).await;
                                     
-                                    tokio::task::spawn_blocking(move || {
-                                        let _ = child.wait();
-                                    }).await.ok();
+                                    let exit_status = tokio::task::spawn_blocking(move || {
+                                        child.wait()
+                                    }).await;
                                     
-                                    let _ = output.send(Message::GameExited).await;
+                                    let crashed = match &exit_status {
+                                        Ok(Ok(status)) => !status.success(),
+                                        _ => true,
+                                    };
+                                    
+                                    if crashed {
+                                        let _ = output.send(Message::GameCrashed).await;
+                                    } else {
+                                        let _ = output.send(Message::GameExited).await;
+                                    }
                                 }
                                 Err(e) => {
                                     let _ = output.send(Message::LaunchComplete(Err(format!("Не удалось запустить игру: {}", e)))).await;
@@ -602,7 +641,7 @@ impl MinecraftLauncher {
                 
                 Space::with_height(Length::Fill),
                 
-                text("ByStep v1.0.6").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
+                text("ByStep v1.0.7").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
             ]
             .padding(18)
             .spacing(6)
@@ -650,10 +689,82 @@ impl MinecraftLauncher {
             ]
         ];
 
-        container(main_content)
+        let crash_dialog: Element<'_, Message> = if self.show_crash_dialog {
+            container(
+                container(
+                    column![
+                        text("Не удалось войти в игру?").size(18).color(TEXT_PRIMARY),
+                        Space::with_height(10),
+                        text("Игра завершилась с ошибкой несколько раз.\nРекомендуем переустановить файлы игры.").size(13).color(TEXT_SECONDARY),
+                        Space::with_height(20),
+                        row![
+                            button(
+                                container(text("Переустановить").size(14)).padding([10, 20])
+                            )
+                            .on_press(Message::ReinstallGame)
+                            .style(move |_, status| {
+                                let hovered = status == button::Status::Hovered;
+                                button::Style {
+                                    background: Some(iced::Background::Color(
+                                        if hovered { Color { r: 0.95, g: 0.25, b: 0.25, a: 1.0 } }
+                                        else { ACCENT }
+                                    )),
+                                    text_color: Color::WHITE,
+                                    border: Border { radius: 8.0.into(), ..Default::default() },
+                                    shadow: Shadow {
+                                        color: Color { r: 1.0, g: 0.2, b: 0.2, a: 0.6 },
+                                        offset: Vector::new(0.0, 0.0),
+                                        blur_radius: 12.0,
+                                    },
+                                    ..Default::default()
+                                }
+                            }),
+                            Space::with_width(10),
+                            button(
+                                container(text("Закрыть").size(14)).padding([10, 20])
+                            )
+                            .on_press(Message::DismissCrashDialog)
+                            .style(move |_, status| {
+                                let hovered = status == button::Status::Hovered;
+                                button::Style {
+                                    background: Some(iced::Background::Color(
+                                        if hovered { Color { r: 0.25, g: 0.25, b: 0.28, a: 1.0 } }
+                                        else { Color { r: 0.15, g: 0.15, b: 0.18, a: 1.0 } }
+                                    )),
+                                    text_color: TEXT_SECONDARY,
+                                    border: Border { radius: 8.0.into(), width: 1.0, color: Color { r: 1.0, g: 1.0, b: 1.0, a: 0.1 } },
+                                    ..Default::default()
+                                }
+                            }),
+                        ]
+                    ].align_x(Alignment::Center)
+                )
+                .padding(30)
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(Color { r: 0.08, g: 0.08, b: 0.1, a: 0.98 })),
+                    border: Border { radius: 15.0.into(), width: 1.0, color: ACCENT },
+                    ..Default::default()
+                })
+            )
             .width(Length::Fill)
             .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(move |_| container::Style {
+                background: Some(iced::Background::Color(Color { r: 0.0, g: 0.0, b: 0.0, a: 0.7 })),
+                ..Default::default()
+            })
             .into()
+        } else {
+            Space::new(0, 0).into()
+        };
+
+        stack![
+            container(main_content)
+                .width(Length::Fill)
+                .height(Length::Fill),
+            crash_dialog
+        ].into()
     }
 
     fn dashboard_view(&self) -> Element<'_, Message> {
@@ -978,6 +1089,31 @@ impl MinecraftLauncher {
                             .step(1u32)
                             .style(slider_style)
                     ].spacing(12),
+
+                    Space::with_height(30),
+
+                    column![
+                        text("ПЕРЕУСТАНОВКА").size(12).color(TEXT_SECONDARY),
+                        Space::with_height(8),
+                        button(
+                            container(text("Удалить файлы игры").size(14)).padding([10, 20])
+                        )
+                        .on_press(Message::ReinstallGame)
+                        .style(move |_, status| {
+                            let hovered = status == button::Status::Hovered;
+                            button::Style {
+                                background: Some(iced::Background::Color(
+                                    if hovered { Color { r: 0.4, g: 0.1, b: 0.1, a: 1.0 } }
+                                    else { Color { r: 0.3, g: 0.08, b: 0.08, a: 1.0 } }
+                                )),
+                                text_color: Color { r: 1.0, g: 0.4, b: 0.4, a: 1.0 },
+                                border: Border { radius: 8.0.into(), width: 1.0, color: Color { r: 0.5, g: 0.15, b: 0.15, a: 1.0 } },
+                                ..Default::default()
+                            }
+                        }),
+                        Space::with_height(5),
+                        text("Удалит все файлы игры для переустановки").size(11).color(TEXT_SECONDARY),
+                    ].spacing(0),
                 ]
                 .padding(30)
             )
@@ -1018,6 +1154,11 @@ impl MinecraftLauncher {
         let config_dir = directories::ProjectDirs::from("com", "bystep", "launcher")?.config_dir().to_path_buf();
         std::fs::create_dir_all(&config_dir).ok()?;
         Some(config_dir)
+    }
+
+    fn get_game_data_dir() -> Option<PathBuf> {
+        directories::ProjectDirs::from("com", "bystep", "minecraft")
+            .map(|dirs| dirs.data_dir().to_path_buf())
     }
 
     fn save_play_stats(&self) {
