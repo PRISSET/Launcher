@@ -735,7 +735,7 @@ modelPart_left_pants_leg:true
 modelPart_right_pants_leg:true
 modelPart_hat:true
 mainHand:"right"
-resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip"]
+resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip","file/cWearable-Christmas-Hats0_8v20.zip"]
 "#;
         
         fs::write(&options_path, options_content)?;

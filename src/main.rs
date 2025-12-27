@@ -28,7 +28,7 @@ const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
 
-const CURRENT_VERSION: &str = "1.0.5";
+const CURRENT_VERSION: &str = "1.0.6";
 const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 
@@ -477,8 +477,21 @@ impl MinecraftLauncher {
                     let _ = output.send(Message::InstallProgress("Запуск игры...".into(), 0.96)).await;
                     
                     let options_path = game_dir.join("options.txt");
-                    if !options_path.exists() {
-                        let options_content = "lang:ru_ru\nresourcePacks:[\"vanilla\",\"file/Actually-3D-Stuff-1.21.zip\"]\n";
+                    let resource_packs_line = r#"resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip","file/cWearable-Christmas-Hats0_8v20.zip"]"#;
+                    let incompatible_line = r#"incompatibleResourcePacks:[]"#;
+                    
+                    if options_path.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&options_path) {
+                            let mut lines: Vec<String> = content.lines()
+                                .filter(|line| !line.starts_with("resourcePacks:") && !line.starts_with("incompatibleResourcePacks:"))
+                                .map(|s| s.to_string())
+                                .collect();
+                            lines.push(resource_packs_line.to_string());
+                            lines.push(incompatible_line.to_string());
+                            let _ = std::fs::write(&options_path, lines.join("\n"));
+                        }
+                    } else {
+                        let options_content = format!("lang:ru_ru\n{}\n{}\n", resource_packs_line, incompatible_line);
                         let _ = std::fs::write(&options_path, options_content);
                     }
                     
@@ -589,7 +602,7 @@ impl MinecraftLauncher {
                 
                 Space::with_height(Length::Fill),
                 
-                text("ByStep v1.0.5").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
+                text("ByStep v1.0.6").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
             ]
             .padding(18)
             .spacing(6)
