@@ -17,6 +17,7 @@ zip = "2"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 image = { version = "0.24", features = ["gif"] }
+chrono = "0.4"
 
 [build-dependencies]
 winresource = "0.1"

@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use minecraft::{MinecraftInstaller, get_game_directory, build_launch_command};
+use chrono::{Local, Datelike, NaiveDate};
+use std::collections::HashMap;
 
 const ACCENT: Color = Color { r: 0.85, g: 0.15, b: 0.15, a: 1.0 }; 
 const BG_SIDEBAR: Color = Color { r: 0.05, g: 0.05, b: 0.07, a: 0.98 };
@@ -22,7 +24,7 @@ const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
 
-const CURRENT_VERSION: &str = "1.0.1";
+const CURRENT_VERSION: &str = "1.0.2";
 const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 
@@ -85,6 +87,12 @@ impl Default for LauncherSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PlayTimeStats {
+    daily: HashMap<String, u64>,
+    total_seconds: u64,
+}
+
 #[derive(Debug, Clone)]
 enum LaunchState {
     CheckingUpdate,
@@ -112,11 +120,14 @@ struct MinecraftLauncher {
     gif_frames: Vec<image::Handle>,
     current_frame: usize,
     update_checked: bool,
+    play_stats: PlayTimeStats,
+    current_session_seconds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum Tab {
     Dashboard,
+    Statistics,
     Settings,
 }
 
@@ -133,6 +144,7 @@ enum Message {
     NextFrame,
     CheckUpdate,
     UpdateStatus(UpdateResult),
+    PlayTimeTick,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +159,7 @@ enum UpdateResult {
 impl MinecraftLauncher {
     fn new() -> (Self, Task<Message>) {
         let settings = Self::load_settings().unwrap_or_default();
+        let play_stats = Self::load_play_stats().unwrap_or_default();
         let gif_frames = load_gif_frames();
         (
             Self {
@@ -159,6 +172,8 @@ impl MinecraftLauncher {
                 gif_frames,
                 current_frame: 0,
                 update_checked: false,
+                play_stats,
+                current_session_seconds: 0,
             },
             Task::perform(check_for_updates(), Message::UpdateStatus),
         )
@@ -202,6 +217,8 @@ impl MinecraftLauncher {
             Message::GameExited => {
                 self.launch_state = LaunchState::Idle;
                 self.game_running.store(false, Ordering::SeqCst);
+                self.save_play_stats();
+                self.current_session_seconds = 0;
             }
             Message::NextFrame => {
                 if !self.gif_frames.is_empty() {
@@ -237,12 +254,24 @@ impl MinecraftLauncher {
                     }
                 }
             }
+            Message::PlayTimeTick => {
+                if matches!(self.launch_state, LaunchState::Playing) {
+                    self.current_session_seconds += 1;
+                    let today = Local::now().format("%Y-%m-%d").to_string();
+                    *self.play_stats.daily.entry(today).or_insert(0) += 1;
+                    self.play_stats.total_seconds += 1;
+                    if self.current_session_seconds % 60 == 0 {
+                        self.save_play_stats();
+                    }
+                }
+            }
         }
         Task::none()
     }
 
     fn subscription(&self) -> Subscription<Message> {
         let gif_timer = time::every(Duration::from_millis(50)).map(|_| Message::NextFrame);
+        let play_timer = time::every(Duration::from_secs(1)).map(|_| Message::PlayTimeTick);
         
         if self.game_running.load(Ordering::SeqCst) {
             let nickname = self.nickname.clone();
@@ -353,7 +382,7 @@ impl MinecraftLauncher {
                     }
                 })
             );
-            Subscription::batch([gif_timer, game_sub])
+            Subscription::batch([gif_timer, game_sub, play_timer])
         } else {
             gif_timer
         }
@@ -404,11 +433,12 @@ impl MinecraftLauncher {
                 ).width(Length::Fill).padding(iced::Padding { top: 20.0, right: 0.0, bottom: 30.0, left: 0.0 }),
 
                 sidebar_button("ГЛАВНАЯ", Tab::Dashboard, &self.active_tab),
+                sidebar_button("СТАТИСТИКА", Tab::Statistics, &self.active_tab),
                 sidebar_button("НАСТРОЙКИ", Tab::Settings, &self.active_tab),
                 
                 Space::with_height(Length::Fill),
                 
-                text("ByStep v1.0.1").size(10).color(Color { r: 0.3, g: 0.3, b: 0.3, a: 1.0 }),
+                text("ByStep v1.0.2").size(10).color(Color { r: 0.3, g: 0.3, b: 0.3, a: 1.0 }),
             ]
             .padding(25)
             .spacing(8)
@@ -437,6 +467,7 @@ impl MinecraftLauncher {
             container(
                 match self.active_tab {
                     Tab::Dashboard => self.dashboard_view(),
+                    Tab::Statistics => self.statistics_view(),
                     Tab::Settings => self.settings_view(),
                 }
             )
@@ -708,6 +739,125 @@ impl MinecraftLauncher {
         let config_dir = directories::ProjectDirs::from("com", "bystep", "launcher")?.config_dir().to_path_buf();
         std::fs::create_dir_all(&config_dir).ok()?;
         Some(config_dir)
+    }
+
+    fn save_play_stats(&self) {
+        if let Some(config_dir) = Self::get_config_dir() {
+            if let Ok(json) = serde_json::to_string_pretty(&self.play_stats) {
+                let _ = std::fs::write(config_dir.join("playtime.json"), json);
+            }
+        }
+    }
+
+    fn load_play_stats() -> Option<PlayTimeStats> {
+        let config_dir = Self::get_config_dir()?;
+        let content = std::fs::read_to_string(config_dir.join("playtime.json")).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
+    fn statistics_view(&self) -> Element<'_, Message> {
+        let today = Local::now();
+        let today_str = today.format("%Y-%m-%d").to_string();
+        let today_seconds = self.play_stats.daily.get(&today_str).copied().unwrap_or(0);
+        
+        let week_seconds: u64 = (0..7)
+            .filter_map(|days_ago| {
+                let date = today.date_naive() - chrono::Duration::days(days_ago);
+                let date_str = date.format("%Y-%m-%d").to_string();
+                self.play_stats.daily.get(&date_str).copied()
+            })
+            .sum();
+        
+        let month_seconds: u64 = self.play_stats.daily.iter()
+            .filter(|(date_str, _)| {
+                if let Ok(date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                    date.year() == today.year() && date.month() == today.month()
+                } else {
+                    false
+                }
+            })
+            .map(|(_, &secs)| secs)
+            .sum();
+
+        let format_time = |seconds: u64| -> String {
+            let hours = seconds / 3600;
+            let minutes = (seconds % 3600) / 60;
+            if hours > 0 {
+                format!("{}ч {}м", hours, minutes)
+            } else {
+                format!("{}м", minutes)
+            }
+        };
+
+        let session_display = if self.current_session_seconds > 0 {
+            format_time(self.current_session_seconds)
+        } else {
+            "—".to_string()
+        };
+
+        column![
+            text("СТАТИСТИКА").size(36).font(iced::Font::MONOSPACE).style(move |_| text::Style { color: Some(TEXT_PRIMARY) }),
+            Space::with_height(30),
+            
+            container(
+                column![
+                    row![
+                        container(
+                            column![
+                                text("ТЕКУЩАЯ СЕССИЯ").size(11).color(TEXT_SECONDARY),
+                                Space::with_height(5),
+                                text(session_display.clone()).size(24).color(ACCENT),
+                            ].align_x(Alignment::Center)
+                        ).width(Length::Fill).padding(15),
+                        
+                        container(
+                            column![
+                                text("СЕГОДНЯ").size(11).color(TEXT_SECONDARY),
+                                Space::with_height(5),
+                                text(format_time(today_seconds)).size(24).color(TEXT_PRIMARY),
+                            ].align_x(Alignment::Center)
+                        ).width(Length::Fill).padding(15),
+                    ],
+                    
+                    Space::with_height(10),
+                    
+                    row![
+                        container(
+                            column![
+                                text("ЗА НЕДЕЛЮ").size(11).color(TEXT_SECONDARY),
+                                Space::with_height(5),
+                                text(format_time(week_seconds)).size(24).color(TEXT_PRIMARY),
+                            ].align_x(Alignment::Center)
+                        ).width(Length::Fill).padding(15),
+                        
+                        container(
+                            column![
+                                text("ЗА МЕСЯЦ").size(11).color(TEXT_SECONDARY),
+                                Space::with_height(5),
+                                text(format_time(month_seconds)).size(24).color(TEXT_PRIMARY),
+                            ].align_x(Alignment::Center)
+                        ).width(Length::Fill).padding(15),
+                    ],
+                    
+                    Space::with_height(10),
+                    
+                    container(
+                        column![
+                            text("ВСЕГО").size(11).color(TEXT_SECONDARY),
+                            Space::with_height(5),
+                            text(format_time(self.play_stats.total_seconds)).size(28).color(ACCENT),
+                        ].align_x(Alignment::Center)
+                    ).width(Length::Fill).padding(15),
+                ]
+            )
+            .style(move |_| container::Style {
+                background: Some(iced::Background::Color(BG_CARD)),
+                border: Border { radius: 15.0.into(), color: Color { r: 1.0, g: 1.0, b: 1.0, a: 0.05 }, width: 1.0 },
+                ..Default::default()
+            })
+            .width(Length::Fill)
+            .max_width(500)
+        ].into()
     }
 }
 
