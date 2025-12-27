@@ -16,6 +16,10 @@ use std::time::Duration;
 use minecraft::{MinecraftInstaller, get_game_directory, build_launch_command};
 use chrono::{Local, Datelike, NaiveDate};
 use std::collections::HashMap;
+use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
+use std::sync::Mutex;
+
+const DISCORD_CLIENT_ID: &str = "1454405559120822426";
 
 const ACCENT: Color = Color { r: 0.85, g: 0.15, b: 0.15, a: 1.0 }; 
 const BG_SIDEBAR: Color = Color { r: 0.05, g: 0.05, b: 0.07, a: 0.98 };
@@ -24,7 +28,7 @@ const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
 
-const CURRENT_VERSION: &str = "1.0.2";
+const CURRENT_VERSION: &str = "1.0.3";
 const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 
@@ -45,7 +49,7 @@ fn load_gif_frames() -> Vec<image::Handle> {
             })
             .collect()
     } else {
-        vec![image::Handle::from_bytes(include_bytes!("background.png").to_vec())]
+        vec![image::Handle::from_bytes(include_bytes!("../background.png").to_vec())]
     }
 }
 
@@ -122,6 +126,8 @@ struct MinecraftLauncher {
     update_checked: bool,
     play_stats: PlayTimeStats,
     current_session_seconds: u64,
+    discord_client: Arc<Mutex<Option<DiscordIpcClient>>>,
+    game_start_time: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -161,6 +167,9 @@ impl MinecraftLauncher {
         let settings = Self::load_settings().unwrap_or_default();
         let play_stats = Self::load_play_stats().unwrap_or_default();
         let gif_frames = load_gif_frames();
+        
+        let discord_client = Self::init_discord();
+        
         (
             Self {
                 nickname: settings.nickname,
@@ -174,9 +183,50 @@ impl MinecraftLauncher {
                 update_checked: false,
                 play_stats,
                 current_session_seconds: 0,
+                discord_client,
+                game_start_time: None,
             },
             Task::perform(check_for_updates(), Message::UpdateStatus),
         )
+    }
+    
+    fn init_discord() -> Arc<Mutex<Option<DiscordIpcClient>>> {
+        let client = DiscordIpcClient::new(DISCORD_CLIENT_ID)
+            .ok()
+            .and_then(|mut c| {
+                c.connect().ok()?;
+                Some(c)
+            });
+        Arc::new(Mutex::new(client))
+    }
+    
+    fn update_discord_presence(&self, state: &str, details: &str) {
+        if let Ok(mut guard) = self.discord_client.lock() {
+            if let Some(client) = guard.as_mut() {
+                let mut act = activity::Activity::new()
+                    .state(state)
+                    .details(details)
+                    .assets(
+                        activity::Assets::new()
+                            .large_image("icon")
+                            .large_text("ByStep Launcher")
+                    );
+                
+                if let Some(start) = self.game_start_time {
+                    act = act.timestamps(activity::Timestamps::new().start(start));
+                }
+                
+                let _ = client.set_activity(act);
+            }
+        }
+    }
+    
+    fn clear_discord_presence(&self) {
+        if let Ok(mut guard) = self.discord_client.lock() {
+            if let Some(client) = guard.as_mut() {
+                let _ = client.clear_activity();
+            }
+        }
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -210,7 +260,14 @@ impl MinecraftLauncher {
             }
             Message::LaunchComplete(result) => {
                 match result {
-                    Ok(_) => self.launch_state = LaunchState::Playing,
+                    Ok(_) => {
+                        self.launch_state = LaunchState::Playing;
+                        self.game_start_time = Some(std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64);
+                        self.update_discord_presence("Играет на сервере", &format!("Игрок: {}", self.nickname));
+                    }
                     Err(e) => self.launch_state = LaunchState::Error(e),
                 }
             }
@@ -219,6 +276,8 @@ impl MinecraftLauncher {
                 self.game_running.store(false, Ordering::SeqCst);
                 self.save_play_stats();
                 self.current_session_seconds = 0;
+                self.game_start_time = None;
+                self.update_discord_presence("В лаунчере", "Выбирает настройки");
             }
             Message::NextFrame => {
                 if !self.gif_frames.is_empty() {
@@ -234,6 +293,7 @@ impl MinecraftLauncher {
                 match result {
                     UpdateResult::NoUpdate => {
                         self.launch_state = LaunchState::Idle;
+                        self.update_discord_presence("В лаунчере", "Выбирает настройки");
                     }
                     UpdateResult::UpdateAvailable(version, url) => {
                         self.launch_state = LaunchState::Updating { 
@@ -392,7 +452,7 @@ impl MinecraftLauncher {
         let bg_handle = if !self.gif_frames.is_empty() {
             self.gif_frames[self.current_frame].clone()
         } else {
-            image::Handle::from_bytes(include_bytes!("background.png").to_vec())
+            image::Handle::from_bytes(include_bytes!("../background.png").to_vec())
         };
         let icon_handle = image::Handle::from_bytes(include_bytes!("icon.png").to_vec());
 
@@ -438,7 +498,7 @@ impl MinecraftLauncher {
                 
                 Space::with_height(Length::Fill),
                 
-                text("ByStep v1.0.2").size(10).color(Color { r: 0.3, g: 0.3, b: 0.3, a: 1.0 }),
+                text("ByStep v1.0.3").size(10).color(Color { r: 0.3, g: 0.3, b: 0.3, a: 1.0 }),
             ]
             .padding(25)
             .spacing(8)
