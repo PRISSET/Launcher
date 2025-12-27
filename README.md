@@ -4,7 +4,7 @@
 
 # ByStep Launcher
 
-### Custom Minecraft Launcher
+Custom Minecraft launcher for ByStep server
 
 <br>
 
@@ -15,8 +15,6 @@
 <br>
 
 [English](#english) | [Русский](#russian)
-
-<br>
 
 ---
 
