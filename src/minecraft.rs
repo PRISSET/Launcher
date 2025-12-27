@@ -16,7 +16,6 @@ const FABRIC_META_URL: &str = "https://meta.fabricmc.net";
 
 const JAVA21_URL: &str = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jre_x64_windows_hotspot_21.0.5_11.zip";
 
-// GitHub API для получения списка модов
 const MODS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents";
 const MODS_RAW_URL: &str = "https://raw.githubusercontent.com/PRISSET/mods/main";
 const SHADERPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/shaderpacks";
@@ -157,7 +156,6 @@ impl MinecraftInstaller {
         let mods_dir = self.game_dir.join("mods");
         fs::create_dir_all(&mods_dir)?;
         
-        // Получаем список файлов из GitHub API
         let response = self.client
             .get(MODS_REPO_API)
             .header("User-Agent", "ByStep-Launcher")
@@ -170,14 +168,12 @@ impl MinecraftInstaller {
         
         let files: Vec<serde_json::Value> = response.json().await?;
         
-        // Собираем список модов с GitHub
         let github_mods: Vec<String> = files.iter()
             .filter_map(|f| f.get("name").and_then(|n| n.as_str()))
             .filter(|n| n.ends_with(".jar"))
             .map(|n| n.to_string())
             .collect();
         
-        // Удаляем моды которых нет на GitHub
         if let Ok(entries) = fs::read_dir(&mods_dir) {
             for entry in entries.flatten() {
                 let file_name = entry.file_name().to_string_lossy().to_string();
@@ -187,16 +183,13 @@ impl MinecraftInstaller {
             }
         }
         
-        // Скачиваем недостающие моды
         for name in &github_mods {
             let mod_path = mods_dir.join(name);
             
-            // Пропускаем если мод уже скачан
             if mod_path.exists() {
                 continue;
             }
             
-            // URL-encode имя файла для скачивания
             let encoded_name = name.replace(" ", "%20");
             let download_url = format!("{}/{}", MODS_RAW_URL, encoded_name);
             let _ = self.download_file(&download_url, &mod_path).await;
@@ -706,7 +699,6 @@ impl MinecraftInstaller {
             }
         }
 
-        // Создаём options.txt с русским языком
         self.create_default_options()?;
 
         Ok(())
@@ -715,19 +707,15 @@ impl MinecraftInstaller {
     fn create_default_options(&self) -> Result<()> {
         let options_path = self.game_dir.join("options.txt");
         
-        // Если файл уже существует, не перезаписываем (пользователь мог изменить настройки)
         if options_path.exists() {
-            // Проверяем, есть ли уже настройка языка
             let content = fs::read_to_string(&options_path).unwrap_or_default();
             if !content.contains("lang:") {
-                // Добавляем язык в существующий файл
                 let new_content = format!("lang:ru_ru\n{}", content);
                 fs::write(&options_path, new_content)?;
             }
             return Ok(());
         }
         
-        // Создаём новый options.txt с русским языком и базовыми настройками
         let options_content = r#"lang:ru_ru
 soundCategory_master:1.0
 soundCategory_music:1.0
@@ -757,11 +745,9 @@ resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip"]
     }
 }
 
-/// Настраивает options.txt для включения/выключения шейдеров
 pub fn configure_shaders(game_dir: &Path, enable_shaders: bool) -> Result<()> {
     let iris_config_dir = game_dir.join("config").join("iris.properties");
     
-    // Создаём папку config если нет
     if let Some(parent) = iris_config_dir.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -851,7 +837,6 @@ pub fn build_launch_command(
     
     let fabric_version_id = format!("fabric-loader-{}-{}", FABRIC_LOADER_VERSION, MINECRAFT_VERSION);
     
-    // Читаем version info чтобы получить правильный asset index id
     let version_json_path = game_dir
         .join("versions")
         .join(MINECRAFT_VERSION)
@@ -875,7 +860,6 @@ pub fn build_launch_command(
     let java_path = find_java()?;
     let mut cmd = std::process::Command::new(java_path);
     
-    // Скрываем консольное окно
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
@@ -936,12 +920,10 @@ pub fn build_launch_command(
     cmd.arg("--userType");
     cmd.arg("legacy");
     
-    // Создаём servers.dat с нашим сервером
     if let Some(server) = server_address {
         if !server.is_empty() {
             let _ = create_servers_dat(game_dir, server);
             
-            // Также пробуем через аргументы (для совместимости)
             let parts: Vec<&str> = server.split(':').collect();
             cmd.arg("--server");
             cmd.arg(parts[0]);
@@ -957,7 +939,6 @@ pub fn build_launch_command(
     Ok(cmd)
 }
 
-/// Создаёт servers.dat файл с сервером ByStep
 fn create_servers_dat(game_dir: &Path, server_address: &str) -> Result<()> {
     use std::io::{Cursor, Write};
     
@@ -968,35 +949,19 @@ fn create_servers_dat(game_dir: &Path, server_address: &str) -> Result<()> {
     let port = parts.get(1).unwrap_or(&"25565");
     let full_address = format!("{}:{}", ip, port);
     
-    // NBT формат для servers.dat
-    // Compound "" {
-    //   List "servers" [
-    //     Compound {
-    //       String "ip": "address:port"
-    //       String "name": "ByStep Server"
-    //       Byte "acceptTextures": 1
-    //     }
-    //   ]
-    // }
-    
     let mut data = Vec::new();
     
-    // Root compound tag (type 10, empty name)
-    data.push(10); // TAG_Compound
-    data.extend_from_slice(&0u16.to_be_bytes()); // empty name length
+    data.push(10);
+    data.extend_from_slice(&0u16.to_be_bytes());
     
-    // "servers" list
-    data.push(9); // TAG_List
+    data.push(9);
     let servers_name = b"servers";
     data.extend_from_slice(&(servers_name.len() as u16).to_be_bytes());
     data.extend_from_slice(servers_name);
-    data.push(10); // list contains TAG_Compound
-    data.extend_from_slice(&1i32.to_be_bytes()); // 1 element in list
+    data.push(10);
+    data.extend_from_slice(&1i32.to_be_bytes());
     
-    // Server entry compound (no type/name for list elements)
-    
-    // "ip" string
-    data.push(8); // TAG_String
+    data.push(8);
     let ip_name = b"ip";
     data.extend_from_slice(&(ip_name.len() as u16).to_be_bytes());
     data.extend_from_slice(ip_name);
@@ -1004,8 +969,7 @@ fn create_servers_dat(game_dir: &Path, server_address: &str) -> Result<()> {
     data.extend_from_slice(&(ip_bytes.len() as u16).to_be_bytes());
     data.extend_from_slice(ip_bytes);
     
-    // "name" string
-    data.push(8); // TAG_String
+    data.push(8);
     let name_key = b"name";
     data.extend_from_slice(&(name_key.len() as u16).to_be_bytes());
     data.extend_from_slice(name_key);
@@ -1013,18 +977,15 @@ fn create_servers_dat(game_dir: &Path, server_address: &str) -> Result<()> {
     data.extend_from_slice(&(name_val.len() as u16).to_be_bytes());
     data.extend_from_slice(name_val);
     
-    // "acceptTextures" byte (optional, for resource packs)
-    data.push(1); // TAG_Byte
+    data.push(1);
     let accept_name = b"acceptTextures";
     data.extend_from_slice(&(accept_name.len() as u16).to_be_bytes());
     data.extend_from_slice(accept_name);
-    data.push(1); // true
+    data.push(1);
     
-    // End of server compound
-    data.push(0); // TAG_End
+    data.push(0);
     
-    // End of root compound
-    data.push(0); // TAG_End
+    data.push(0);
     
     fs::write(&servers_path, &data)?;
     

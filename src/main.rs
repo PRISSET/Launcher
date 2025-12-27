@@ -22,7 +22,10 @@ const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
 
-// Загружаем кадры GIF при компиляции
+const CURRENT_VERSION: &str = "1.0.0";
+const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
+const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
+
 fn load_gif_frames() -> Vec<image::Handle> {
     use ::image::codecs::gif::GifDecoder;
     use ::image::AnimationDecoder;
@@ -40,7 +43,6 @@ fn load_gif_frames() -> Vec<image::Handle> {
             })
             .collect()
     } else {
-        // Fallback - статичная картинка
         vec![image::Handle::from_bytes(include_bytes!("background.png").to_vec())]
     }
 }
@@ -85,6 +87,8 @@ impl Default for LauncherSettings {
 
 #[derive(Debug, Clone)]
 enum LaunchState {
+    CheckingUpdate,
+    Updating { progress: String },
     Idle,
     Installing { step: String, progress: f32 },
     Launching,
@@ -107,6 +111,7 @@ struct MinecraftLauncher {
     game_running: Arc<AtomicBool>,
     gif_frames: Vec<image::Handle>,
     current_frame: usize,
+    update_checked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -126,6 +131,17 @@ enum Message {
     LaunchComplete(Result<(), String>),
     GameExited,
     NextFrame,
+    CheckUpdate,
+    UpdateStatus(UpdateResult),
+}
+
+#[derive(Debug, Clone)]
+enum UpdateResult {
+    NoUpdate,
+    UpdateAvailable(String, String),
+    Downloading(String),
+    Downloaded(PathBuf),
+    Error(String),
 }
 
 impl MinecraftLauncher {
@@ -137,13 +153,14 @@ impl MinecraftLauncher {
                 nickname: settings.nickname,
                 ram_gb: settings.ram_gb,
                 shaders_enabled: settings.shaders_enabled,
-                launch_state: LaunchState::Idle,
+                launch_state: LaunchState::CheckingUpdate,
                 active_tab: Tab::Dashboard,
                 game_running: Arc::new(AtomicBool::new(false)),
                 gif_frames,
                 current_frame: 0,
+                update_checked: false,
             },
-            Task::none(),
+            Task::perform(check_for_updates(), Message::UpdateStatus),
         )
     }
 
@@ -189,6 +206,35 @@ impl MinecraftLauncher {
             Message::NextFrame => {
                 if !self.gif_frames.is_empty() {
                     self.current_frame = (self.current_frame + 1) % self.gif_frames.len();
+                }
+            }
+            Message::CheckUpdate => {
+                self.launch_state = LaunchState::CheckingUpdate;
+                return Task::perform(check_for_updates(), Message::UpdateStatus);
+            }
+            Message::UpdateStatus(result) => {
+                self.update_checked = true;
+                match result {
+                    UpdateResult::NoUpdate => {
+                        self.launch_state = LaunchState::Idle;
+                    }
+                    UpdateResult::UpdateAvailable(version, url) => {
+                        self.launch_state = LaunchState::Updating { 
+                            progress: format!("Обновление до v{}...", version) 
+                        };
+                        return Task::perform(download_and_run_update(url), Message::UpdateStatus);
+                    }
+                    UpdateResult::Downloading(msg) => {
+                        self.launch_state = LaunchState::Updating { progress: msg };
+                    }
+                    UpdateResult::Downloaded(path) => {
+                        let _ = std::process::Command::new(path).spawn();
+                        std::process::exit(0);
+                    }
+                    UpdateResult::Error(e) => {
+                        self.launch_state = LaunchState::Idle;
+                        eprintln!("Update error: {}", e);
+                    }
                 }
             }
         }
@@ -241,18 +287,15 @@ impl MinecraftLauncher {
                         let _ = output.send(Message::InstallProgress("Игра установлена".into(), 0.8)).await;
                     }
                     
-                    // Скачиваем/обновляем моды
                     let _ = output.send(Message::InstallProgress("Проверка модов...".into(), 0.82)).await;
                     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                     
                     if let Err(e) = installer.download_mods().await {
-                        // Не критичная ошибка - продолжаем запуск
                         let _ = output.send(Message::InstallProgress(format!("Моды: {}", e), 0.85)).await;
                     } else {
                         let _ = output.send(Message::InstallProgress("Моды обновлены!".into(), 0.85)).await;
                     }
                     
-                    // Скачиваем/обновляем шейдерпаки
                     let _ = output.send(Message::InstallProgress("Проверка шейдеров...".into(), 0.86)).await;
                     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                     
@@ -262,7 +305,6 @@ impl MinecraftLauncher {
                         let _ = output.send(Message::InstallProgress("Шейдеры обновлены!".into(), 0.88)).await;
                     }
                     
-                    // Скачиваем/обновляем текстурпаки
                     let _ = output.send(Message::InstallProgress("Проверка текстурпаков...".into(), 0.90)).await;
                     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                     
@@ -272,14 +314,12 @@ impl MinecraftLauncher {
                         let _ = output.send(Message::InstallProgress("Текстуры обновлены!".into(), 0.92)).await;
                     }
                     
-                    // Настраиваем шейдеры
                     let _ = output.send(Message::InstallProgress("Настройка шейдеров...".into(), 0.94)).await;
                     let _ = minecraft::configure_shaders(&game_dir, shaders_enabled);
                     
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     let _ = output.send(Message::InstallProgress("Запуск игры...".into(), 0.96)).await;
                     
-                    // Создаём options.txt с русским языком если его нет
                     let options_path = game_dir.join("options.txt");
                     if !options_path.exists() {
                         let options_content = "lang:ru_ru\nresourcePacks:[\"vanilla\",\"file/Actually-3D-Stuff-1.21.zip\"]\n";
@@ -296,7 +336,6 @@ impl MinecraftLauncher {
                                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                                     let _ = output.send(Message::LaunchComplete(Ok(()))).await;
                                     
-                                    // Ждём в отдельном потоке
                                     tokio::task::spawn_blocking(move || {
                                         let _ = child.wait();
                                     }).await.ok();
@@ -414,6 +453,8 @@ impl MinecraftLauncher {
 
     fn dashboard_view(&self) -> Element<'_, Message> {
         let (button_text, button_enabled) = match &self.launch_state {
+            LaunchState::CheckingUpdate => ("ПРОВЕРКА...", false),
+            LaunchState::Updating { .. } => ("ОБНОВЛЕНИЕ...", false),
             LaunchState::Idle => ("ИГРАТЬ", !self.nickname.is_empty()),
             LaunchState::Installing { .. } => ("УСТАНОВКА...", false),
             LaunchState::Launching => ("ЗАПУСК...", false),
@@ -422,6 +463,36 @@ impl MinecraftLauncher {
         };
 
         let status_widget: Element<'_, Message> = match &self.launch_state {
+            LaunchState::CheckingUpdate => {
+                container(
+                    text("Проверка обновлений...").size(14).color(TEXT_SECONDARY)
+                )
+                .padding(15)
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(BG_CARD)),
+                    border: Border { radius: 8.0.into(), ..Default::default() },
+                    ..Default::default()
+                })
+                .width(Length::Fill)
+                .into()
+            }
+            LaunchState::Updating { progress } => {
+                container(
+                    column![
+                        text(progress).size(14).color(ACCENT),
+                        Space::with_height(5),
+                        text("Пожалуйста, подождите...").size(12).color(TEXT_SECONDARY),
+                    ].align_x(Alignment::Center)
+                )
+                .padding(20)
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(BG_CARD)),
+                    border: Border { radius: 10.0.into(), ..Default::default() },
+                    ..Default::default()
+                })
+                .width(Length::Fill)
+                .into()
+            }
             LaunchState::Installing { step, progress } => {
                 container(
                     column![
@@ -472,9 +543,38 @@ impl MinecraftLauncher {
             _ => Space::with_height(0).into()
         };
 
+        let update_icon = image::Handle::from_bytes(include_bytes!("icons8-обновление-96.png").to_vec());
+        let update_button = button(
+            container(
+                image(update_icon)
+                    .width(24)
+                    .height(24)
+            ).padding([6, 8])
+        )
+        .on_press(Message::CheckUpdate)
+        .style(move |_, status| {
+            let hovered = status == button::Status::Hovered;
+            button::Style {
+                background: Some(iced::Background::Color(
+                    if hovered { Color { r: 0.2, g: 0.2, b: 0.22, a: 0.9 } } 
+                    else { Color { r: 0.12, g: 0.12, b: 0.14, a: 0.8 } }
+                )),
+                text_color: TEXT_SECONDARY,
+                border: Border { radius: 8.0.into(), width: 1.0, color: Color { r: 1.0, g: 1.0, b: 1.0, a: 0.1 } },
+                shadow: Shadow::default(),
+                ..Default::default()
+            }
+        });
+
         column![
-            text("ГЛАВНАЯ").size(36).font(iced::Font::MONOSPACE).style(move |_| text::Style { color: Some(TEXT_PRIMARY) }),
-            text("Добро пожаловать в ByStep").size(14).color(TEXT_SECONDARY),
+            row![
+                column![
+                    text("ГЛАВНАЯ").size(36).font(iced::Font::MONOSPACE).style(move |_| text::Style { color: Some(TEXT_PRIMARY) }),
+                    text("Добро пожаловать в ByStep").size(14).color(TEXT_SECONDARY),
+                ],
+                Space::with_width(Length::Fill),
+                update_button,
+            ].align_y(Alignment::Start),
 
             Space::with_height(20),
             status_widget,
@@ -674,3 +774,78 @@ fn sidebar_button<'a>(label: &'a str, tab: Tab, active_tab: &Tab) -> Element<'a,
     .into()
 }
 
+
+async fn check_for_updates() -> UpdateResult {
+    let client = reqwest::Client::new();
+    
+    let response = match client
+        .get(GITHUB_RELEASES_API)
+        .header("User-Agent", "ByStep-Launcher")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return UpdateResult::Error(e.to_string()),
+    };
+    
+    if !response.status().is_success() {
+        return UpdateResult::NoUpdate;
+    }
+    
+    let release: serde_json::Value = match response.json().await {
+        Ok(r) => r,
+        Err(e) => return UpdateResult::Error(e.to_string()),
+    };
+    
+    let latest_version = release.get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim_start_matches('v');
+    
+    if latest_version.is_empty() || latest_version == CURRENT_VERSION {
+        return UpdateResult::NoUpdate;
+    }
+    
+    if let Some(assets) = release.get("assets").and_then(|a| a.as_array()) {
+        for asset in assets {
+            let name = asset.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if name == INSTALLER_NAME {
+                if let Some(url) = asset.get("browser_download_url").and_then(|u| u.as_str()) {
+                    return UpdateResult::UpdateAvailable(
+                        latest_version.to_string(),
+                        url.to_string()
+                    );
+                }
+            }
+        }
+    }
+    
+    UpdateResult::NoUpdate
+}
+
+async fn download_and_run_update(url: String) -> UpdateResult {
+    let client = reqwest::Client::new();
+    
+    let response = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => return UpdateResult::Error(e.to_string()),
+    };
+    
+    if !response.status().is_success() {
+        return UpdateResult::Error("Не удалось скачать обновление".to_string());
+    }
+    
+    let bytes = match response.bytes().await {
+        Ok(b) => b,
+        Err(e) => return UpdateResult::Error(e.to_string()),
+    };
+    
+    let temp_dir = std::env::temp_dir();
+    let installer_path = temp_dir.join(INSTALLER_NAME);
+    
+    if let Err(e) = std::fs::write(&installer_path, &bytes) {
+        return UpdateResult::Error(e.to_string());
+    }
+    
+    UpdateResult::Downloaded(installer_path)
+}
