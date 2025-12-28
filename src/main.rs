@@ -28,7 +28,7 @@ const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
 
-const CURRENT_VERSION: &str = "1.0.7";
+const CURRENT_VERSION: &str = "1.0.8";
 const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 
@@ -507,7 +507,7 @@ impl MinecraftLauncher {
                     let _ = output.send(Message::InstallProgress("Запуск игры...".into(), 0.96)).await;
                     
                     let options_path = game_dir.join("options.txt");
-                    let resource_packs_line = r#"resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip","file/cWearable-Christmas-Hats0_8v20.zip"]"#;
+                    let resource_packs_line = r#"resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip"]"#;
                     let incompatible_line = r#"incompatibleResourcePacks:[]"#;
                     
                     if options_path.exists() {

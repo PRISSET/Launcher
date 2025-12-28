@@ -17,8 +17,6 @@ const FABRIC_META_URL: &str = "https://meta.fabricmc.net";
 const JAVA21_URL: &str = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jre_x64_windows_hotspot_21.0.5_11.zip";
 
 const MODS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents";
-const MODS_RAW_URL: &str = "https://raw.githubusercontent.com/PRISSET/mods/main";
-const MODS_JSON_URL: &str = "https://raw.githubusercontent.com/PRISSET/mods/main/mods.json";
 const SHADERPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/shaderpacks";
 const RESOURCEPACKS_REPO_API: &str = "https://api.github.com/repos/PRISSET/mods/contents/resourcepacks";
 
@@ -29,10 +27,11 @@ pub struct InstallProgress {
 }
 
 #[derive(Debug, Deserialize)]
-struct ModsConfig {
-    mods: Vec<String>,
-    resourcepacks: Vec<String>,
-    shaderpacks: Vec<String>,
+struct GitHubFile {
+    name: String,
+    download_url: Option<String>,
+    #[serde(rename = "type")]
+    file_type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,8 +164,9 @@ impl MinecraftInstaller {
         fs::create_dir_all(&mods_dir)?;
         
         let response = self.client
-            .get(MODS_JSON_URL)
+            .get(MODS_REPO_API)
             .header("User-Agent", "ByStep-Launcher")
+            .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await?;
         
@@ -174,27 +174,37 @@ impl MinecraftInstaller {
             return Err(anyhow!("Не удалось получить список модов: {}", response.status()));
         }
         
-        let config: ModsConfig = response.json().await?;
+        let files: Vec<GitHubFile> = response.json().await?;
+        let mod_files: Vec<&GitHubFile> = files.iter()
+            .filter(|f| f.file_type == "file" && f.name.ends_with(".jar"))
+            .collect();
+        
+        let mod_names: Vec<String> = mod_files.iter().map(|f| f.name.clone()).collect();
         
         if let Ok(entries) = fs::read_dir(&mods_dir) {
             for entry in entries.flatten() {
                 let file_name = entry.file_name().to_string_lossy().to_string();
-                if file_name.ends_with(".jar") && !config.mods.contains(&file_name) {
-                    let _ = fs::remove_file(entry.path());
+                if file_name.ends_with(".jar") && !mod_names.contains(&file_name) {
+                    for _ in 0..3 {
+                        if fs::remove_file(entry.path()).is_ok() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
             }
         }
         
-        for name in &config.mods {
-            let mod_path = mods_dir.join(name);
+        for file in mod_files {
+            let mod_path = mods_dir.join(&file.name);
             
             if mod_path.exists() {
                 continue;
             }
             
-            let encoded_name = name.replace(" ", "%20");
-            let download_url = format!("{}/{}", MODS_RAW_URL, encoded_name);
-            let _ = self.download_file(&download_url, &mod_path).await;
+            if let Some(download_url) = &file.download_url {
+                let _ = self.download_file(download_url, &mod_path).await;
+            }
         }
         
         Ok(())
@@ -205,8 +215,9 @@ impl MinecraftInstaller {
         fs::create_dir_all(&shaderpacks_dir)?;
         
         let response = self.client
-            .get(MODS_JSON_URL)
+            .get(SHADERPACKS_REPO_API)
             .header("User-Agent", "ByStep-Launcher")
+            .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await?;
         
@@ -214,18 +225,18 @@ impl MinecraftInstaller {
             return Err(anyhow!("Не удалось получить список шейдерпаков"));
         }
         
-        let config: ModsConfig = response.json().await?;
+        let files: Vec<GitHubFile> = response.json().await?;
         
-        for name in &config.shaderpacks {
-            let shaderpack_path = shaderpacks_dir.join(name);
+        for file in files.iter().filter(|f| f.file_type == "file") {
+            let shaderpack_path = shaderpacks_dir.join(&file.name);
             
             if shaderpack_path.exists() {
                 continue;
             }
             
-            let encoded_name = name.replace(" ", "%20");
-            let download_url = format!("{}/shaderpacks/{}", MODS_RAW_URL, encoded_name);
-            let _ = self.download_file(&download_url, &shaderpack_path).await;
+            if let Some(download_url) = &file.download_url {
+                let _ = self.download_file(download_url, &shaderpack_path).await;
+            }
         }
         
         Ok(())
@@ -236,8 +247,9 @@ impl MinecraftInstaller {
         fs::create_dir_all(&resourcepacks_dir)?;
         
         let response = self.client
-            .get(MODS_JSON_URL)
+            .get(RESOURCEPACKS_REPO_API)
             .header("User-Agent", "ByStep-Launcher")
+            .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await?;
         
@@ -245,18 +257,18 @@ impl MinecraftInstaller {
             return Err(anyhow!("Не удалось получить список текстурпаков"));
         }
         
-        let config: ModsConfig = response.json().await?;
+        let files: Vec<GitHubFile> = response.json().await?;
         
-        for name in &config.resourcepacks {
-            let pack_path = resourcepacks_dir.join(name);
+        for file in files.iter().filter(|f| f.file_type == "file") {
+            let pack_path = resourcepacks_dir.join(&file.name);
             
             if pack_path.exists() {
                 continue;
             }
             
-            let encoded_name = name.replace(" ", "%20");
-            let download_url = format!("{}/resourcepacks/{}", MODS_RAW_URL, encoded_name);
-            let _ = self.download_file(&download_url, &pack_path).await;
+            if let Some(download_url) = &file.download_url {
+                let _ = self.download_file(download_url, &pack_path).await;
+            }
         }
         
         Ok(())
@@ -725,7 +737,7 @@ modelPart_left_pants_leg:true
 modelPart_right_pants_leg:true
 modelPart_hat:true
 mainHand:"right"
-resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip","file/cWearable-Christmas-Hats0_8v20.zip"]
+resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip"]
 "#;
         
         fs::write(&options_path, options_content)?;
