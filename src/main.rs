@@ -28,7 +28,7 @@ const TEXT_PRIMARY: Color = Color { r: 0.98, g: 0.98, b: 1.0, a: 1.0 };
 const TEXT_SECONDARY: Color = Color { r: 0.7, g: 0.73, b: 0.78, a: 1.0 };
 const SERVER_ADDRESS: &str = "144.31.169.7:25565";
 
-const CURRENT_VERSION: &str = "1.0.8";
+const CURRENT_VERSION: &str = "1.0.9";
 const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 
@@ -641,7 +641,7 @@ impl MinecraftLauncher {
                 
                 Space::with_height(Length::Fill),
                 
-                text("ByStep v1.0.7").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
+                text("ByStep v1.0.9").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
             ]
             .padding(18)
             .spacing(6)
