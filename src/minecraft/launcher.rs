@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use std::process::Stdio;
 
-use super::version::*;
+use super::version::{GameVersion, ShaderQuality};
 
 pub fn get_game_directory() -> PathBuf {
     directories::ProjectDirs::from("com", "bystep", "minecraft")
@@ -14,6 +14,11 @@ pub fn get_game_directory() -> PathBuf {
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join(".bystep-minecraft")
         })
+}
+
+pub fn get_versioned_game_directory(version: GameVersion) -> PathBuf {
+    let base_dir = get_game_directory();
+    base_dir.join(version.mods_folder())
 }
 
 pub fn generate_offline_uuid(nickname: &str) -> String {
@@ -30,15 +35,17 @@ pub fn generate_offline_uuid(nickname: &str) -> String {
     )
 }
 
-pub fn find_java(game_dir: &Path) -> Result<PathBuf> {
-    let java_dir = game_dir.join("runtime").join("java-21");
+pub fn find_java(game_dir: &Path, version: GameVersion) -> Result<PathBuf> {
+    let java_version = version.java_version();
+    let base_dir = get_game_directory();
+    let java_dir = base_dir.join("runtime").join(format!("java-{}", java_version));
     let java_exe = java_dir.join("bin").join("java.exe");
     
     if java_exe.exists() {
         return Ok(java_exe);
     }
     
-    Err(anyhow!("Java 21 not found"))
+    Err(anyhow!("Java {} not found", java_version))
 }
 
 fn collect_jars(dir: &Path, jars: &mut Vec<String>) -> Result<()> {
@@ -61,11 +68,13 @@ pub fn build_launch_command(
     nickname: &str,
     ram_gb: u32,
     server_address: Option<&str>,
+    version: GameVersion,
 ) -> Result<std::process::Command> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     
-    let java_path = find_java(game_dir)?;
+    let mc_version = version.minecraft_version();
+    let java_path = find_java(game_dir, version)?;
     
     let mut cmd = std::process::Command::new(java_path);
     
@@ -83,7 +92,7 @@ pub fn build_launch_command(
     fs::create_dir_all(&natives_dir)?;
     cmd.arg(format!("-Djava.library.path={}", natives_dir.display()));
     cmd.arg("-Dminecraft.launcher.brand=ByStep");
-    cmd.arg("-Dminecraft.launcher.version=1.0.0");
+    cmd.arg("-Dminecraft.launcher.version=1.1.1");
     
     let mut classpath = Vec::new();
     let libraries_dir = game_dir.join("libraries");
@@ -93,8 +102,8 @@ pub fn build_launch_command(
     
     let client_jar = game_dir
         .join("versions")
-        .join(MINECRAFT_VERSION)
-        .join(format!("{}.jar", MINECRAFT_VERSION));
+        .join(mc_version)
+        .join(format!("{}.jar", mc_version));
     classpath.push(client_jar.display().to_string());
     
     cmd.arg("-cp");
@@ -102,8 +111,8 @@ pub fn build_launch_command(
     
     let version_json_path = game_dir
         .join("versions")
-        .join(MINECRAFT_VERSION)
-        .join(format!("{}.json", MINECRAFT_VERSION));
+        .join(mc_version)
+        .join(format!("{}.json", mc_version));
     
     let asset_index_id = if version_json_path.exists() {
         let content = fs::read_to_string(&version_json_path).unwrap_or_default();
@@ -111,16 +120,16 @@ pub fn build_launch_command(
             info.get("assetIndex")
                 .and_then(|ai| ai.get("id"))
                 .and_then(|id| id.as_str())
-                .unwrap_or(MINECRAFT_VERSION)
+                .unwrap_or(mc_version)
                 .to_string()
         } else {
-            MINECRAFT_VERSION.to_string()
+            mc_version.to_string()
         }
     } else {
-        MINECRAFT_VERSION.to_string()
+        mc_version.to_string()
     };
     
-    let fabric_version_id = format!("fabric-loader-{}-{}", FABRIC_LOADER_VERSION, MINECRAFT_VERSION);
+    let fabric_version_id = format!("fabric-loader-{}-{}", version.fabric_loader_version(), mc_version);
     cmd.arg("net.fabricmc.loader.impl.launch.knot.KnotClient");
     
     cmd.arg("--username").arg(nickname);
@@ -203,23 +212,25 @@ pub fn create_servers_dat(game_dir: &Path, server_address: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn configure_shaders(game_dir: &Path, enable_shaders: bool) -> Result<()> {
+pub fn configure_shaders(game_dir: &Path, quality: ShaderQuality, version: GameVersion) -> Result<()> {
     let iris_config_path = game_dir.join("config").join("iris.properties");
     
     if let Some(parent) = iris_config_path.parent() {
         fs::create_dir_all(parent)?;
     }
     
-    let shaderpack = if enable_shaders {
-        "ComplementaryUnbound_r5.6.1.zip"
-    } else {
-        ""
+    let (shaderpack, enabled) = match (quality, version) {
+        (ShaderQuality::Off, _) => ("", false),
+        (ShaderQuality::High, GameVersion::Fabric1_21_1) => ("ComplementaryUnbound_r5.6.1.zip", true),
+        (ShaderQuality::Low, GameVersion::Fabric1_21_1) => ("ComplementaryUnbound_r5.6.1.zip", true),
+        (ShaderQuality::High, GameVersion::Fabric1_20_1) => ("Fantasy_Shaders_v1.0.zip", true),
+        (ShaderQuality::Low, GameVersion::Fabric1_20_1) => ("Jooonahs-Grove.zip", true),
     };
     
     let iris_config = format!(
         "shaderPack={}\nenableShaders={}\n",
         shaderpack,
-        enable_shaders
+        enabled
     );
     
     fs::write(&iris_config_path, iris_config)?;

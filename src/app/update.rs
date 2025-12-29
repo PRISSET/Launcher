@@ -15,8 +15,12 @@ impl MinecraftLauncher {
                 self.ram_gb = ram;
                 self.save_settings();
             }
-            Message::ShadersToggled(enabled) => {
-                self.shaders_enabled = enabled;
+            Message::VersionChanged(version) => {
+                self.selected_version = version;
+                self.save_settings();
+            }
+            Message::ShaderQualityChanged(quality) => {
+                self.shader_quality = quality;
                 self.save_settings();
             }
             Message::LaunchGame => {
@@ -62,14 +66,23 @@ impl MinecraftLauncher {
                 self.current_session_seconds = 0;
                 self.game_start_time = None;
                 self.crash_count += 1;
-                if self.crash_count >= 2 {
-                    self.show_crash_dialog = true;
-                }
+                self.show_crash_dialog = true;
+                self.update_discord_presence("В лаунчере", "Выбирает настройки");
+            }
+            Message::GameCrashedWithLog(log) => {
+                self.launch_state = LaunchState::Idle;
+                self.game_running.store(false, Ordering::SeqCst);
+                self.current_session_seconds = 0;
+                self.game_start_time = None;
+                self.crash_count += 1;
+                self.crash_log = Some(log);
+                self.show_crash_dialog = true;
                 self.update_discord_presence("В лаунчере", "Выбирает настройки");
             }
             Message::ReinstallGame => {
                 self.show_crash_dialog = false;
                 self.crash_count = 0;
+                self.crash_log = None;
                 if let Some(game_dir) = Self::get_game_data_dir() {
                     let _ = std::fs::remove_dir_all(&game_dir);
                 }
@@ -77,6 +90,12 @@ impl MinecraftLauncher {
             }
             Message::DismissCrashDialog => {
                 self.show_crash_dialog = false;
+                self.crash_log = None;
+            }
+            Message::CopyCrashLog => {
+                if let Some(log) = &self.crash_log {
+                    let _ = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(log.clone()));
+                }
             }
             Message::NextFrame => {
                 if !self.gif_frames.is_empty() {
@@ -138,6 +157,9 @@ impl MinecraftLauncher {
             }
             Message::ServerStatusUpdate(status) => {
                 self.server_status = status;
+            }
+            Message::ToggleChangelog => {
+                self.show_changelog = !self.show_changelog;
             }
         }
         Task::none()

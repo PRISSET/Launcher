@@ -6,19 +6,32 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use discord_rich_presence::DiscordIpcClient;
 use iced::widget::image;
+use crate::minecraft::{GameVersion, ShaderQuality};
 
 pub const SERVER_ADDRESS: &str = "144.31.169.7:25565";
-pub const CURRENT_VERSION: &str = "1.1.0";
+pub const CURRENT_VERSION: &str = "1.1.1";
 pub const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 pub const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 pub const DISCORD_CLIENT_ID: &str = "1454405559120822426";
+
+pub const CHANGELOG: &[(&str, &str)] = &[
+    ("1.1.1", "Отдельные папки для версий, улучшения UI"),
+    ("1.1.0", "Выбор версии, качество шейдеров, модульная архитектура"),
+    ("1.0.9", "Новая иконка, исправления"),
+    ("1.0.8", "cloth-config, улучшения стабильности"),
+    ("1.0.7", "Диалог переустановки при крашах"),
+    ("1.0.6", "Fabric Loader 0.18.1"),
+    ("1.0.5", "Discord Rich Presence"),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LauncherSettings {
     pub nickname: String,
     pub ram_gb: u32,
     #[serde(default)]
-    pub shaders_enabled: bool,
+    pub selected_version: GameVersion,
+    #[serde(default)]
+    pub shader_quality: ShaderQuality,
 }
 
 impl Default for LauncherSettings {
@@ -26,7 +39,8 @@ impl Default for LauncherSettings {
         Self {
             nickname: String::new(),
             ram_gb: 4,
-            shaders_enabled: true,
+            selected_version: GameVersion::default(),
+            shader_quality: ShaderQuality::default(),
         }
     }
 }
@@ -63,7 +77,6 @@ pub struct ServerStatus {
     pub player_names: Vec<String>,
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tab {
     Dashboard,
@@ -75,7 +88,8 @@ pub enum Tab {
 pub enum Message {
     NicknameChanged(String),
     RamChanged(u32),
-    ShadersToggled(bool),
+    VersionChanged(GameVersion),
+    ShaderQualityChanged(ShaderQuality),
     LaunchGame,
     SwitchTab(Tab),
     InstallProgress(String, f32),
@@ -91,6 +105,9 @@ pub enum Message {
     DeclineUpdate,
     ReinstallGame,
     DismissCrashDialog,
+    ToggleChangelog,
+    CopyCrashLog,
+    GameCrashedWithLog(String),
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +122,8 @@ pub enum UpdateResult {
 pub struct MinecraftLauncher {
     pub nickname: String,
     pub ram_gb: u32,
-    pub shaders_enabled: bool,
+    pub selected_version: GameVersion,
+    pub shader_quality: ShaderQuality,
     pub launch_state: LaunchState,
     pub active_tab: Tab,
     pub game_running: Arc<AtomicBool>,
@@ -120,4 +138,6 @@ pub struct MinecraftLauncher {
     pub server_status: ServerStatus,
     pub crash_count: u32,
     pub show_crash_dialog: bool,
+    pub show_changelog: bool,
+    pub crash_log: Option<String>,
 }

@@ -5,32 +5,37 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::fs;
 
-use super::version::*;
+use super::version::{GameVersion, ShaderQuality};
 use super::types::*;
 
 const VERSION_MANIFEST_URL: &str = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
 const FABRIC_META_URL: &str = "https://meta.fabricmc.net";
+const JAVA17_URL: &str = "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.13%2B11/OpenJDK17U-jre_x64_windows_hotspot_17.0.13_11.zip";
 const JAVA21_URL: &str = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jre_x64_windows_hotspot_21.0.5_11.zip";
 const MODS_REPO_BASE: &str = "https://api.github.com/repos/PRISSET/mods/contents";
 
 pub struct MinecraftInstaller {
     client: Client,
     game_dir: PathBuf,
+    version: GameVersion,
 }
 
 impl MinecraftInstaller {
-    pub fn new(game_dir: PathBuf) -> Self {
+    pub fn new(game_dir: PathBuf, version: GameVersion) -> Self {
         Self {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             game_dir,
+            version,
         }
     }
 
     pub async fn is_installed(&self) -> bool {
-        let fabric_id = format!("fabric-loader-{}-{}", FABRIC_LOADER_VERSION, MINECRAFT_VERSION);
+        let mc_version = self.version.minecraft_version();
+        let loader_version = self.version.fabric_loader_version();
+        let fabric_id = format!("fabric-loader-{}-{}", loader_version, mc_version);
         let fabric_json = self.game_dir
             .join("versions")
             .join(&fabric_id)
@@ -38,8 +43,8 @@ impl MinecraftInstaller {
         
         let client_jar = self.game_dir
             .join("versions")
-            .join(MINECRAFT_VERSION)
-            .join(format!("{}.jar", MINECRAFT_VERSION));
+            .join(mc_version)
+            .join(format!("{}.jar", mc_version));
         
         fabric_json.exists() && client_jar.exists()
     }
@@ -59,7 +64,7 @@ impl MinecraftInstaller {
         let mods_dir = self.game_dir.join("mods");
         fs::create_dir_all(&mods_dir)?;
         
-        let mods_api_url = format!("{}/{}", MODS_REPO_BASE, MODS_FOLDER);
+        let mods_api_url = format!("{}/{}", MODS_REPO_BASE, self.version.mods_folder());
         
         let response = self.client
             .get(&mods_api_url)
@@ -108,11 +113,21 @@ impl MinecraftInstaller {
         Ok(())
     }
     
-    pub async fn download_shaderpacks(&self) -> Result<()> {
+    pub async fn download_shaderpacks(&self, quality: ShaderQuality) -> Result<()> {
         let shaderpacks_dir = self.game_dir.join("shaderpacks");
         fs::create_dir_all(&shaderpacks_dir)?;
         
-        let api_url = format!("{}/{}/shaderpacks", MODS_REPO_BASE, MODS_FOLDER);
+        if quality == ShaderQuality::Off {
+            return Ok(());
+        }
+        
+        let quality_folder = match quality {
+            ShaderQuality::Low => "Low",
+            ShaderQuality::High => "High",
+            ShaderQuality::Off => return Ok(()),
+        };
+        
+        let api_url = format!("{}/{}/shaderpacks/{}", MODS_REPO_BASE, self.version.mods_folder(), quality_folder);
         
         let response = self.client
             .get(&api_url)
@@ -122,6 +137,28 @@ impl MinecraftInstaller {
             .await?;
         
         if !response.status().is_success() {
+            let fallback_url = format!("{}/{}/shaderpacks", MODS_REPO_BASE, self.version.mods_folder());
+            let fallback_response = self.client
+                .get(&fallback_url)
+                .header("User-Agent", "ByStep-Launcher")
+                .header("Accept", "application/vnd.github.v3+json")
+                .send()
+                .await?;
+            
+            if !fallback_response.status().is_success() {
+                return Ok(());
+            }
+            
+            let files: Vec<GitHubFile> = fallback_response.json().await?;
+            for file in files.iter().filter(|f| f.file_type == "file") {
+                let shaderpack_path = shaderpacks_dir.join(&file.name);
+                if shaderpack_path.exists() {
+                    continue;
+                }
+                if let Some(download_url) = &file.download_url {
+                    let _ = self.download_file(download_url, &shaderpack_path).await;
+                }
+            }
             return Ok(());
         }
         
@@ -146,7 +183,7 @@ impl MinecraftInstaller {
         let resourcepacks_dir = self.game_dir.join("resourcepacks");
         fs::create_dir_all(&resourcepacks_dir)?;
         
-        let api_url = format!("{}/{}/resourcepacks", MODS_REPO_BASE, MODS_FOLDER);
+        let api_url = format!("{}/{}/resourcepacks", MODS_REPO_BASE, self.version.mods_folder());
         
         let response = self.client
             .get(&api_url)
@@ -177,25 +214,39 @@ impl MinecraftInstaller {
     }
 
     async fn ensure_java(&self) -> Result<()> {
-        let java_dir = self.game_dir.join("runtime").join("java-21");
+        let java_version = self.version.java_version();
+        let base_dir = directories::ProjectDirs::from("com", "bystep", "minecraft")
+            .map(|dirs| dirs.data_dir().to_path_buf())
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(".bystep-minecraft")
+            });
+        let java_dir = base_dir.join("runtime").join(format!("java-{}", java_version));
         let java_exe = java_dir.join("bin").join("java.exe");
         
         if java_exe.exists() {
             return Ok(());
         }
         
-        let runtime_dir = self.game_dir.join("runtime");
+        let runtime_dir = base_dir.join("runtime");
         fs::create_dir_all(&runtime_dir)?;
         
-        let zip_path = runtime_dir.join("java21.zip");
-        self.download_file(JAVA21_URL, &zip_path).await?;
+        let (java_url, prefix) = match java_version {
+            17 => (JAVA17_URL, "jdk-17"),
+            21 => (JAVA21_URL, "jdk-21"),
+            _ => return Err(anyhow!("Unsupported Java version: {}", java_version)),
+        };
+        
+        let zip_path = runtime_dir.join(format!("java{}.zip", java_version));
+        self.download_file(java_url, &zip_path).await?;
         self.extract_zip(&zip_path, &runtime_dir)?;
         let _ = fs::remove_file(&zip_path);
         
         if let Ok(entries) = fs::read_dir(&runtime_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_lowercase();
-                if name.starts_with("jdk-21") || name.starts_with("openjdk") {
+                if name.starts_with(prefix) || name.starts_with("openjdk") {
                     let extracted = entry.path();
                     if extracted != java_dir && extracted.is_dir() {
                         let _ = fs::rename(&extracted, &java_dir);
@@ -205,7 +256,7 @@ impl MinecraftInstaller {
         }
         
         if !java_exe.exists() {
-            return Err(anyhow!("Failed to install Java 21"));
+            return Err(anyhow!("Failed to install Java {}", java_version));
         }
         
         Ok(())
@@ -239,6 +290,8 @@ impl MinecraftInstaller {
     }
 
     async fn download_version_info(&self) -> Result<VersionInfo> {
+        let mc_version = self.version.minecraft_version();
+        
         let manifest: VersionManifest = self.client
             .get(VERSION_MANIFEST_URL)
             .send()
@@ -248,8 +301,8 @@ impl MinecraftInstaller {
 
         let version = manifest.versions
             .iter()
-            .find(|v| v.id == MINECRAFT_VERSION)
-            .ok_or_else(|| anyhow!("Версия {} не найдена", MINECRAFT_VERSION))?;
+            .find(|v| v.id == mc_version)
+            .ok_or_else(|| anyhow!("Версия {} не найдена", mc_version))?;
 
         let version_info: VersionInfo = self.client
             .get(&version.url)
@@ -258,10 +311,10 @@ impl MinecraftInstaller {
             .json()
             .await?;
 
-        let versions_dir = self.game_dir.join("versions").join(MINECRAFT_VERSION);
+        let versions_dir = self.game_dir.join("versions").join(mc_version);
         fs::create_dir_all(&versions_dir)?;
         
-        let json_path = versions_dir.join(format!("{}.json", MINECRAFT_VERSION));
+        let json_path = versions_dir.join(format!("{}.json", mc_version));
         let json_content = serde_json::to_string_pretty(&version_info)?;
         fs::write(&json_path, json_content)?;
 
@@ -269,10 +322,11 @@ impl MinecraftInstaller {
     }
 
     async fn download_client(&self, version_info: &VersionInfo) -> Result<()> {
-        let versions_dir = self.game_dir.join("versions").join(MINECRAFT_VERSION);
+        let mc_version = self.version.minecraft_version();
+        let versions_dir = self.game_dir.join("versions").join(mc_version);
         fs::create_dir_all(&versions_dir)?;
         
-        let jar_path = versions_dir.join(format!("{}.jar", MINECRAFT_VERSION));
+        let jar_path = versions_dir.join(format!("{}.jar", mc_version));
         
         if jar_path.exists() {
             return Ok(());
@@ -365,9 +419,12 @@ impl MinecraftInstaller {
     }
 
     async fn install_fabric(&self) -> Result<()> {
+        let mc_version = self.version.minecraft_version();
+        let loader_version = self.version.fabric_loader_version();
+        
         let fabric_profile_url = format!(
             "{}/v2/versions/loader/{}/{}/profile/json",
-            FABRIC_META_URL, MINECRAFT_VERSION, FABRIC_LOADER_VERSION
+            FABRIC_META_URL, mc_version, loader_version
         );
 
         let fabric_profile: serde_json::Value = self.client
@@ -377,7 +434,7 @@ impl MinecraftInstaller {
             .json()
             .await?;
 
-        let fabric_version_id = format!("fabric-loader-{}-{}", FABRIC_LOADER_VERSION, MINECRAFT_VERSION);
+        let fabric_version_id = format!("fabric-loader-{}-{}", loader_version, mc_version);
         let fabric_dir = self.game_dir.join("versions").join(&fabric_version_id);
         fs::create_dir_all(&fabric_dir)?;
 
@@ -443,7 +500,7 @@ modelPart_left_pants_leg:true
 modelPart_right_pants_leg:true
 modelPart_hat:true
 mainHand:"right"
-resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip"]
+resourcePacks:["vanilla"]
 "#;
         
         fs::write(&options_path, options_content)?;
@@ -483,16 +540,5 @@ resourcePacks:["vanilla","file/Actually-3D-Stuff-1.21.zip"]
         }
 
         Ok(())
-    }
-    
-    pub fn find_java(&self) -> Result<PathBuf> {
-        let java_dir = self.game_dir.join("runtime").join("java-21");
-        let java_exe = java_dir.join("bin").join("java.exe");
-        
-        if java_exe.exists() {
-            return Ok(java_exe);
-        }
-        
-        Err(anyhow!("Java 21 not found"))
     }
 }

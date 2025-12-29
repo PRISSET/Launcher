@@ -1,6 +1,6 @@
 use iced::{
     Alignment, Border, Color, Element, Length, Shadow, Theme, Vector,
-    widget::{button, column, container, row, text, image, stack, Space},
+    widget::{button, column, container, row, text, image, stack, Space, scrollable},
 };
 use crate::app::state::{Message, MinecraftLauncher, Tab};
 use crate::app::styles::{ACCENT, TEXT_PRIMARY, TEXT_SECONDARY};
@@ -124,7 +124,7 @@ impl MinecraftLauncher {
                 
                 Space::with_height(Length::Fill),
                 
-                text("ByStep v1.1.0").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
+                text("ByStep v1.1.1").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
             ]
             .padding(18)
             .spacing(6)
@@ -144,13 +144,51 @@ impl MinecraftLauncher {
     }
 
     fn crash_dialog_view(&self) -> Element<'_, Message> {
+        let crash_log_widget: Element<'_, Message> = if let Some(log) = &self.crash_log {
+            column![
+                container(
+                    scrollable(
+                        text(log).size(11).color(TEXT_SECONDARY)
+                    ).height(150)
+                )
+                .padding(10)
+                .width(Length::Fill)
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(Color { r: 0.05, g: 0.05, b: 0.07, a: 1.0 })),
+                    border: Border { radius: 6.0.into(), width: 1.0, color: Color { r: 1.0, g: 1.0, b: 1.0, a: 0.05 } },
+                    ..Default::default()
+                }),
+                Space::with_height(10),
+                button(
+                    container(text("Копировать лог").size(12)).padding([6, 14])
+                )
+                .on_press(Message::CopyCrashLog)
+                .style(move |_, status| {
+                    let hovered = status == button::Status::Hovered;
+                    button::Style {
+                        background: Some(iced::Background::Color(
+                            if hovered { Color { r: 0.25, g: 0.25, b: 0.28, a: 1.0 } }
+                            else { Color { r: 0.15, g: 0.15, b: 0.18, a: 1.0 } }
+                        )),
+                        text_color: TEXT_SECONDARY,
+                        border: Border { radius: 6.0.into(), width: 1.0, color: Color { r: 1.0, g: 1.0, b: 1.0, a: 0.1 } },
+                        ..Default::default()
+                    }
+                }),
+            ].spacing(0).width(400).into()
+        } else {
+            Space::new(0, 0).into()
+        };
+
         container(
             container(
                 column![
-                    text("Не удалось войти в игру?").size(18).color(TEXT_PRIMARY),
+                    text("Игра завершилась с ошибкой").size(18).color(TEXT_PRIMARY),
                     Space::with_height(10),
-                    text("Игра завершилась с ошибкой несколько раз.\nРекомендуем переустановить файлы игры.").size(13).color(TEXT_SECONDARY),
-                    Space::with_height(20),
+                    text("Рекомендуем переустановить файлы игры.").size(13).color(TEXT_SECONDARY),
+                    Space::with_height(15),
+                    crash_log_widget,
+                    Space::with_height(15),
                     row![
                         button(
                             container(text("Переустановить").size(14)).padding([10, 20])

@@ -29,7 +29,8 @@ impl MinecraftLauncher {
             Self {
                 nickname: settings.nickname,
                 ram_gb: settings.ram_gb,
-                shaders_enabled: settings.shaders_enabled,
+                selected_version: settings.selected_version,
+                shader_quality: settings.shader_quality,
                 launch_state: LaunchState::CheckingUpdate,
                 active_tab: Tab::Dashboard,
                 game_running: Arc::new(AtomicBool::new(false)),
@@ -44,6 +45,8 @@ impl MinecraftLauncher {
                 server_status: ServerStatus::default(),
                 crash_count: 0,
                 show_crash_dialog: false,
+                show_changelog: false,
+                crash_log: None,
             },
             Task::batch([
                 Task::perform(check_for_updates(), Message::UpdateStatus),
@@ -67,7 +70,8 @@ impl MinecraftLauncher {
             let settings = LauncherSettings { 
                 nickname: self.nickname.clone(), 
                 ram_gb: self.ram_gb,
-                shaders_enabled: self.shaders_enabled,
+                selected_version: self.selected_version,
+                shader_quality: self.shader_quality,
             };
             if let Ok(json) = serde_json::to_string_pretty(&settings) {
                 let _ = std::fs::write(config_dir.join("settings.json"), json);
