@@ -79,8 +79,6 @@ pub fn build_launch_command(
     let mut cmd = std::process::Command::new(java_path);
     
     cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
     
     cmd.arg(format!("-Xmx{}G", ram_gb));
     cmd.arg(format!("-Xms{}G", ram_gb.min(2)));
@@ -212,25 +210,122 @@ pub fn create_servers_dat(game_dir: &Path, server_address: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn configure_shaders(game_dir: &Path, quality: ShaderQuality, version: GameVersion) -> Result<()> {
+pub fn create_default_options(game_dir: &Path) -> Result<()> {
+    let options_path = game_dir.join("options.txt");
+    if options_path.exists() {
+        return Ok(());
+    }
+    
+    let options = r#"version:3465
+autoJump:false
+operatorItemsTab:false
+autoSuggestions:true
+chatColors:true
+chatLinks:true
+chatLinksPrompt:true
+enableVsync:true
+entityShadows:true
+forceUnicodeFont:false
+discrete_mouse_scroll:false
+invertYMouse:false
+realmsNotifications:true
+reducedDebugInfo:false
+showSubtitles:false
+directionalAudio:false
+touchscreen:false
+fullscreen:false
+bobView:true
+toggleCrouch:false
+toggleSprint:false
+darkMojangStudiosBackground:false
+hideLightningFlashes:false
+mouseSensitivity:0.5
+fov:0.0
+screenEffectScale:1.0
+fovEffectScale:1.0
+darknessEffectScale:1.0
+glintSpeed:0.5
+glintStrength:0.75
+damageTiltStrength:1.0
+highContrast:false
+gamma:0.5
+renderDistance:12
+simulationDistance:12
+entityDistanceScaling:1.0
+guiScale:0
+particles:0
+maxFps:120
+graphicsMode:1
+ao:true
+prioritizeChunkUpdates:0
+biomeBlendRadius:2
+renderClouds:"true"
+resourcePacks:[]
+incompatibleResourcePacks:[]
+lastServer:
+lang:ru_ru
+soundDevice:
+chatVisibility:0
+chatOpacity:1.0
+chatLineSpacing:0.0
+textBackgroundOpacity:0.5
+backgroundForChatOnly:true
+hideServerAddress:false
+advancedItemTooltips:false
+pauseOnLostFocus:true
+overrideWidth:0
+overrideHeight:0
+chatHeightFocused:1.0
+chatDelay:0.0
+chatHeightUnfocused:0.4375
+chatScale:1.0
+chatWidth:1.0
+notificationDisplayTime:1.0
+mipmapLevels:4
+useNativeTransport:true
+mainHand:"right"
+attackIndicator:1
+narrator:0
+tutorialStep:none
+mouseWheelSensitivity:1.0
+rawMouseInput:true
+glDebugVerbosity:1
+skipMultiplayerWarning:true
+skipRealms32bitWarning:false
+hideMatchedNames:true
+joinedFirstServer:true
+hideBundleTutorial:false
+syncChunkWrites:true
+showAutosaveIndicator:true
+allowServerListing:true
+onlyShowSecureChat:false
+panoramaScrollSpeed:1.0
+telemetryOptInExtra:false
+onboardAccessibility:false
+"#;
+    
+    fs::write(&options_path, options)?;
+    Ok(())
+}
+
+pub fn configure_shaders(game_dir: &Path, quality: ShaderQuality, _version: GameVersion) -> Result<()> {
+    let _ = create_default_options(game_dir);
+    
     let iris_config_path = game_dir.join("config").join("iris.properties");
     
     if let Some(parent) = iris_config_path.parent() {
         fs::create_dir_all(parent)?;
     }
     
-    let (shaderpack, enabled) = match (quality, version) {
-        (ShaderQuality::Off, _) => ("", false),
-        (ShaderQuality::High, GameVersion::Fabric1_21_1) => ("ComplementaryUnbound_r5.6.1.zip", true),
-        (ShaderQuality::Low, GameVersion::Fabric1_21_1) => ("ComplementaryUnbound_r5.6.1.zip", true),
-        (ShaderQuality::High, GameVersion::Fabric1_20_1) => ("Fantasy_Shaders_v1.0.zip", true),
-        (ShaderQuality::Low, GameVersion::Fabric1_20_1) => ("Jooonahs-Grove.zip", true),
+    let (shaderpack, enable_shaders) = match quality {
+        ShaderQuality::Off => ("", false),
+        ShaderQuality::On => ("ComplementaryUnbound_r5.6.1.zip", true),
     };
     
     let iris_config = format!(
         "shaderPack={}\nenableShaders={}\n",
         shaderpack,
-        enabled
+        enable_shaders
     );
     
     fs::write(&iris_config_path, iris_config)?;

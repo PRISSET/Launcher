@@ -127,7 +127,7 @@ impl MinecraftLauncher {
 
     fn bottom_panel<'a>(&'a self, button_text: &'a str, button_enabled: bool) -> Element<'a, Message> {
         let versions: Vec<GameVersion> = GameVersion::all();
-        let shader_qualities: Vec<ShaderQuality> = ShaderQuality::for_version(self.selected_version);
+        let shader_qualities: Vec<ShaderQuality> = ShaderQuality::all();
 
         container(
             column![

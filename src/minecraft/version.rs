@@ -51,39 +51,19 @@ impl GameVersion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ShaderQuality {
     Off,
-    Low,
     #[default]
-    High,
+    On,
 }
 
 impl ShaderQuality {
     pub fn display_name(&self) -> &'static str {
         match self {
             ShaderQuality::Off => "Выкл",
-            ShaderQuality::Low => "Низкие",
-            ShaderQuality::High => "Высокие",
-        }
-    }
-
-    pub fn display_name_for_version(&self, version: GameVersion) -> &'static str {
-        match version {
-            GameVersion::Fabric1_21_1 => match self {
-                ShaderQuality::Off => "Выкл",
-                ShaderQuality::High => "Вкл",
-                ShaderQuality::Low => "Низкие",
-            },
-            _ => self.display_name(),
+            ShaderQuality::On => "Вкл",
         }
     }
 
     pub fn all() -> Vec<ShaderQuality> {
-        vec![ShaderQuality::Off, ShaderQuality::Low, ShaderQuality::High]
-    }
-
-    pub fn for_version(version: GameVersion) -> Vec<ShaderQuality> {
-        match version {
-            GameVersion::Fabric1_20_1 => vec![ShaderQuality::Off, ShaderQuality::Low, ShaderQuality::High],
-            GameVersion::Fabric1_21_1 => vec![ShaderQuality::Off, ShaderQuality::High],
-        }
+        vec![ShaderQuality::Off, ShaderQuality::On]
     }
 }

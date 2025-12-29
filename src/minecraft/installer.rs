@@ -121,13 +121,7 @@ impl MinecraftInstaller {
             return Ok(());
         }
         
-        let quality_folder = match quality {
-            ShaderQuality::Low => "Low",
-            ShaderQuality::High => "High",
-            ShaderQuality::Off => return Ok(()),
-        };
-        
-        let api_url = format!("{}/{}/shaderpacks/{}", MODS_REPO_BASE, self.version.mods_folder(), quality_folder);
+        let api_url = format!("{}/{}/shaderpacks", MODS_REPO_BASE, self.version.mods_folder());
         
         let response = self.client
             .get(&api_url)
@@ -137,32 +131,23 @@ impl MinecraftInstaller {
             .await?;
         
         if !response.status().is_success() {
-            let fallback_url = format!("{}/{}/shaderpacks", MODS_REPO_BASE, self.version.mods_folder());
-            let fallback_response = self.client
-                .get(&fallback_url)
-                .header("User-Agent", "ByStep-Launcher")
-                .header("Accept", "application/vnd.github.v3+json")
-                .send()
-                .await?;
-            
-            if !fallback_response.status().is_success() {
-                return Ok(());
-            }
-            
-            let files: Vec<GitHubFile> = fallback_response.json().await?;
-            for file in files.iter().filter(|f| f.file_type == "file") {
-                let shaderpack_path = shaderpacks_dir.join(&file.name);
-                if shaderpack_path.exists() {
-                    continue;
-                }
-                if let Some(download_url) = &file.download_url {
-                    let _ = self.download_file(download_url, &shaderpack_path).await;
-                }
-            }
             return Ok(());
         }
         
         let files: Vec<GitHubFile> = response.json().await?;
+        let shader_names: Vec<String> = files.iter()
+            .filter(|f| f.file_type == "file")
+            .map(|f| f.name.clone())
+            .collect();
+        
+        if let Ok(entries) = fs::read_dir(&shaderpacks_dir) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                if file_name.ends_with(".zip") && !shader_names.contains(&file_name) {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
         
         for file in files.iter().filter(|f| f.file_type == "file") {
             let shaderpack_path = shaderpacks_dir.join(&file.name);
