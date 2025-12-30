@@ -124,7 +124,7 @@ impl MinecraftLauncher {
                 
                 Space::with_height(Length::Fill),
                 
-                text("ByStep v1.1.1").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
+                text("ByStep v1.1.2").size(10).color(Color { r: 0.4, g: 0.4, b: 0.4, a: 1.0 }),
             ]
             .padding(18)
             .spacing(6)

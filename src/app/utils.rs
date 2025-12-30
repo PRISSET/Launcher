@@ -8,7 +8,7 @@ pub fn load_gif_frames() -> Vec<image::Handle> {
     use ::image::codecs::gif::GifDecoder;
     use ::image::AnimationDecoder;
     
-    let gif_data = include_bytes!("../giphy.gif");
+    let gif_data = include_bytes!("../background.gif");
     let cursor = std::io::Cursor::new(gif_data.as_slice());
     
     if let Ok(decoder) = GifDecoder::new(cursor) {
