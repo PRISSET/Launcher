@@ -1,6 +1,6 @@
 [Setup]
 AppName=ByStep Launcher
-AppVersion=1.1.1
+AppVersion=1.1.3
 AppPublisher=ByStep
 DefaultDirName={autopf}\ByStep Launcher
 DefaultGroupName=ByStep Launcher

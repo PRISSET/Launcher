@@ -1,5 +1,6 @@
 use iced::{Subscription, time};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 use crate::app::state::{Message, MinecraftLauncher, SERVER_ADDRESS};
 use crate::app::utils::fetch_server_status;
@@ -43,16 +44,27 @@ impl MinecraftLauncher {
                     
                     let installer = MinecraftInstaller::new(game_dir.clone(), selected_version);
                     
-                    let _ = output.send(Message::InstallProgress("Проверка установки...".into(), 0.1)).await;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    let _ = output.send(Message::InstallProgress("Проверка установки...".into(), 0.05)).await;
                     
                     let is_installed = installer.is_installed().await;
                     
                     if !is_installed {
-                        let _ = output.send(Message::InstallProgress(format!("Установка {}...", selected_version.display_name()), 0.15)).await;
-                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                        let _ = output.send(Message::InstallProgress(format!("Установка {}...", selected_version.display_name()), 0.08)).await;
                         
-                        match installer.install_simple().await {
+                        let progress_sender = Arc::new(tokio::sync::Mutex::new(output.clone()));
+                        let progress_sender_clone = progress_sender.clone();
+                        
+                        let installer_with_progress = installer.with_progress(move |msg, progress| {
+                            let sender = progress_sender_clone.clone();
+                            let message = msg.to_string();
+                            tokio::spawn(async move {
+                                use iced::futures::SinkExt;
+                                let mut sender = sender.lock().await;
+                                let _ = sender.send(Message::InstallProgress(message, progress)).await;
+                            });
+                        });
+                        
+                        match installer_with_progress.install_simple().await {
                             Ok(()) => {
                                 let _ = output.send(Message::InstallProgress("Установка завершена!".into(), 0.85)).await;
                             }
@@ -62,34 +74,63 @@ impl MinecraftLauncher {
                             }
                         }
                     } else {
-                        let _ = output.send(Message::InstallProgress("Игра установлена".into(), 0.8)).await;
+                        let _ = output.send(Message::InstallProgress("Игра установлена".into(), 0.80)).await;
                     }
                     
-                    let _ = output.send(Message::InstallProgress("Проверка модов...".into(), 0.82)).await;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    let _ = output.send(Message::InstallProgress("Проверка модов...".into(), 0.80)).await;
                     
-                    if let Err(e) = installer.download_mods().await {
+                    let progress_sender = Arc::new(tokio::sync::Mutex::new(output.clone()));
+                    let progress_sender_clone = progress_sender.clone();
+                    
+                    let installer_for_mods = MinecraftInstaller::new(game_dir.clone(), selected_version)
+                        .with_progress(move |msg, progress| {
+                            let sender = progress_sender_clone.clone();
+                            let message = msg.to_string();
+                            tokio::spawn(async move {
+                                use iced::futures::SinkExt;
+                                let mut sender = sender.lock().await;
+                                let _ = sender.send(Message::InstallProgress(message, progress)).await;
+                            });
+                        });
+                    
+                    if let Err(e) = installer_for_mods.download_mods().await {
                         let _ = output.send(Message::InstallProgress(format!("Моды: {}", e), 0.85)).await;
-                    } else {
-                        let _ = output.send(Message::InstallProgress("Моды обновлены!".into(), 0.85)).await;
                     }
                     
                     let _ = output.send(Message::InstallProgress("Проверка шейдеров...".into(), 0.86)).await;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                     
-                    if let Err(e) = installer.download_shaderpacks(shader_quality).await {
+                    let progress_sender_clone2 = progress_sender.clone();
+                    let installer_for_shaders = MinecraftInstaller::new(game_dir.clone(), selected_version)
+                        .with_progress(move |msg, progress| {
+                            let sender = progress_sender_clone2.clone();
+                            let message = msg.to_string();
+                            tokio::spawn(async move {
+                                use iced::futures::SinkExt;
+                                let mut sender = sender.lock().await;
+                                let _ = sender.send(Message::InstallProgress(message, progress)).await;
+                            });
+                        });
+                    
+                    if let Err(e) = installer_for_shaders.download_shaderpacks(shader_quality).await {
                         let _ = output.send(Message::InstallProgress(format!("Шейдеры: {}", e), 0.88)).await;
-                    } else {
-                        let _ = output.send(Message::InstallProgress("Шейдеры обновлены!".into(), 0.88)).await;
                     }
                     
                     let _ = output.send(Message::InstallProgress("Проверка текстурпаков...".into(), 0.90)).await;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                     
-                    if let Err(e) = installer.download_resourcepacks().await {
+                    let progress_sender_clone3 = progress_sender.clone();
+                    let installer_for_resources = MinecraftInstaller::new(game_dir.clone(), selected_version)
+                        .with_progress(move |msg, progress| {
+                            let sender = progress_sender_clone3.clone();
+                            let message = msg.to_string();
+                            tokio::spawn(async move {
+                                use iced::futures::SinkExt;
+                                let mut sender = sender.lock().await;
+                                let _ = sender.send(Message::InstallProgress(message, progress)).await;
+                            });
+                        });
+                    
+                    if let Err(e) = installer_for_resources.download_resourcepacks().await {
                         let _ = output.send(Message::InstallProgress(format!("Текстуры: {}", e), 0.92)).await;
-                    } else {
-                        let _ = output.send(Message::InstallProgress("Текстуры обновлены!".into(), 0.92)).await;
                     }
                     
                     let _ = output.send(Message::InstallProgress("Настройка шейдеров...".into(), 0.94)).await;

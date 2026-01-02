@@ -12,12 +12,16 @@ const VERSION_MANIFEST_URL: &str = "https://launchermeta.mojang.com/mc/game/vers
 const FABRIC_META_URL: &str = "https://meta.fabricmc.net";
 const JAVA17_URL: &str = "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.13%2B11/OpenJDK17U-jre_x64_windows_hotspot_17.0.13_11.zip";
 const JAVA21_URL: &str = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jre_x64_windows_hotspot_21.0.5_11.zip";
-const MODS_REPO_BASE: &str = "https://api.github.com/repos/PRISSET/mods/contents";
+const MODS_RAW_BASE: &str = "https://raw.githubusercontent.com/PRISSET/mods/main";
+const MODS_API_BASE: &str = "https://api.github.com/repos/PRISSET/mods/contents";
+
+pub type ProgressCallback = Box<dyn Fn(&str, f32) + Send + Sync>;
 
 pub struct MinecraftInstaller {
     client: Client,
     game_dir: PathBuf,
     version: GameVersion,
+    progress_callback: Option<ProgressCallback>,
 }
 
 impl MinecraftInstaller {
@@ -29,6 +33,21 @@ impl MinecraftInstaller {
                 .unwrap_or_else(|_| Client::new()),
             game_dir,
             version,
+            progress_callback: None,
+        }
+    }
+
+    pub fn with_progress<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&str, f32) + Send + Sync + 'static,
+    {
+        self.progress_callback = Some(Box::new(callback));
+        self
+    }
+
+    fn report_progress(&self, message: &str, progress: f32) {
+        if let Some(cb) = &self.progress_callback {
+            cb(message, progress);
         }
     }
 
@@ -50,13 +69,28 @@ impl MinecraftInstaller {
     }
 
     pub async fn install_simple(&self) -> Result<()> {
+        self.report_progress("Проверка Java...", 0.05);
         self.ensure_java().await?;
+        
+        self.report_progress("Загрузка информации о версии...", 0.10);
         let version_info = self.download_version_info().await?;
+        
+        self.report_progress("Загрузка клиента Minecraft...", 0.15);
         self.download_client(&version_info).await?;
+        
+        self.report_progress("Загрузка библиотек...", 0.20);
         self.download_libraries(&version_info).await?;
+        
+        self.report_progress("Загрузка ресурсов...", 0.40);
         self.download_assets(&version_info).await?;
+        
+        self.report_progress("Установка Fabric...", 0.70);
         self.install_fabric().await?;
+        
+        self.report_progress("Загрузка модов...", 0.80);
         self.download_mods().await?;
+        
+        self.report_progress("Установка завершена!", 0.85);
         Ok(())
     }
 
@@ -64,7 +98,7 @@ impl MinecraftInstaller {
         let mods_dir = self.game_dir.join("mods");
         fs::create_dir_all(&mods_dir)?;
         
-        let mods_api_url = format!("{}/{}", MODS_REPO_BASE, self.version.mods_folder());
+        let mods_api_url = format!("{}/{}", MODS_API_BASE, self.version.mods_folder());
         
         let response = self.client
             .get(&mods_api_url)
@@ -98,16 +132,21 @@ impl MinecraftInstaller {
             }
         }
         
-        for file in mod_files {
+        let total = mod_files.len();
+        for (i, file) in mod_files.iter().enumerate() {
             let mod_path = mods_dir.join(&file.name);
             
             if mod_path.exists() {
                 continue;
             }
             
-            if let Some(download_url) = &file.download_url {
-                let _ = self.download_file(download_url, &mod_path).await;
-            }
+            self.report_progress(
+                &format!("Мод: {} ({}/{})", file.name, i + 1, total),
+                0.80 + (0.05 * (i as f32 / total as f32))
+            );
+            
+            let raw_url = format!("{}/{}/{}", MODS_RAW_BASE, self.version.mods_folder(), urlencoding::encode(&file.name));
+            let _ = self.download_file(&raw_url, &mod_path).await;
         }
         
         Ok(())
@@ -121,7 +160,7 @@ impl MinecraftInstaller {
             return Ok(());
         }
         
-        let api_url = format!("{}/{}/shaderpacks", MODS_REPO_BASE, self.version.mods_folder());
+        let api_url = format!("{}/{}/shaderpacks", MODS_API_BASE, self.version.mods_folder());
         
         let response = self.client
             .get(&api_url)
@@ -149,16 +188,23 @@ impl MinecraftInstaller {
             }
         }
         
-        for file in files.iter().filter(|f| f.file_type == "file") {
+        let shader_files: Vec<&GitHubFile> = files.iter().filter(|f| f.file_type == "file").collect();
+        let total = shader_files.len();
+        
+        for (i, file) in shader_files.iter().enumerate() {
             let shaderpack_path = shaderpacks_dir.join(&file.name);
             
             if shaderpack_path.exists() {
                 continue;
             }
             
-            if let Some(download_url) = &file.download_url {
-                let _ = self.download_file(download_url, &shaderpack_path).await;
-            }
+            self.report_progress(
+                &format!("Шейдер: {} ({}/{})", file.name, i + 1, total),
+                0.86 + (0.02 * (i as f32 / total.max(1) as f32))
+            );
+            
+            let raw_url = format!("{}/{}/shaderpacks/{}", MODS_RAW_BASE, self.version.mods_folder(), urlencoding::encode(&file.name));
+            let _ = self.download_file(&raw_url, &shaderpack_path).await;
         }
         
         Ok(())
@@ -168,7 +214,7 @@ impl MinecraftInstaller {
         let resourcepacks_dir = self.game_dir.join("resourcepacks");
         fs::create_dir_all(&resourcepacks_dir)?;
         
-        let api_url = format!("{}/{}/resourcepacks", MODS_REPO_BASE, self.version.mods_folder());
+        let api_url = format!("{}/{}/resourcepacks", MODS_API_BASE, self.version.mods_folder());
         
         let response = self.client
             .get(&api_url)
@@ -182,17 +228,23 @@ impl MinecraftInstaller {
         }
         
         let files: Vec<GitHubFile> = response.json().await?;
+        let pack_files: Vec<&GitHubFile> = files.iter().filter(|f| f.file_type == "file").collect();
+        let total = pack_files.len();
         
-        for file in files.iter().filter(|f| f.file_type == "file") {
+        for (i, file) in pack_files.iter().enumerate() {
             let pack_path = resourcepacks_dir.join(&file.name);
             
             if pack_path.exists() {
                 continue;
             }
             
-            if let Some(download_url) = &file.download_url {
-                let _ = self.download_file(download_url, &pack_path).await;
-            }
+            self.report_progress(
+                &format!("Текстуры: {} ({}/{})", file.name, i + 1, total),
+                0.90 + (0.04 * (i as f32 / total.max(1) as f32))
+            );
+            
+            let raw_url = format!("{}/{}/resourcepacks/{}", MODS_RAW_BASE, self.version.mods_folder(), urlencoding::encode(&file.name));
+            let _ = self.download_file(&raw_url, &pack_path).await;
         }
         
         Ok(())

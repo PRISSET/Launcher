@@ -9,12 +9,13 @@ use iced::widget::image;
 use crate::minecraft::{GameVersion, ShaderQuality};
 
 pub const SERVER_ADDRESS: &str = "144.31.169.7:25565";
-pub const CURRENT_VERSION: &str = "1.1.2";
+pub const CURRENT_VERSION: &str = "1.1.3";
 pub const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/PRISSET/Launcher/releases/latest";
 pub const INSTALLER_NAME: &str = "ByStep-Launcher-Setup.exe";
 pub const DISCORD_CLIENT_ID: &str = "1454405559120822426";
 
 pub const CHANGELOG: &[(&str, &str)] = &[
+    ("1.1.3", "Детальный прогресс установки, исправлен rate limit"),
     ("1.1.2", "Новый анимированный фон"),
     ("1.1.1", "Отдельные папки для версий, улучшения UI"),
     ("1.1.0", "Выбор версии, качество шейдеров, модульная архитектура"),

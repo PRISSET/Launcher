@@ -294,18 +294,31 @@ impl MinecraftLauncher {
                 .into()
             }
             LaunchState::Installing { step, progress } => {
+                let progress_percent = (*progress * 100.0) as u16;
+                let remaining = 100 - progress_percent;
+                
                 container(
                     column![
                         text(step).size(14).color(TEXT_PRIMARY),
                         Space::with_height(10),
                         container(
-                            container(Space::new(Length::Fill, Length::Fill))
-                                .width(Length::FillPortion((*progress * 100.0) as u16))
-                                .style(move |_| container::Style {
-                                    background: Some(iced::Background::Color(ACCENT)),
-                                    border: Border { radius: 3.0.into(), ..Default::default() },
-                                    ..Default::default()
-                                })
+                            row![
+                                container(Space::new(Length::Fill, Length::Fill))
+                                    .width(Length::FillPortion(progress_percent.max(1)))
+                                    .height(Length::Fill)
+                                    .style(move |_| container::Style {
+                                        background: Some(iced::Background::Color(ACCENT)),
+                                        border: Border { radius: 3.0.into(), ..Default::default() },
+                                        ..Default::default()
+                                    }),
+                                container(Space::new(Length::Fill, Length::Fill))
+                                    .width(Length::FillPortion(remaining.max(1)))
+                                    .height(Length::Fill)
+                                    .style(move |_| container::Style {
+                                        background: Some(iced::Background::Color(Color::TRANSPARENT)),
+                                        ..Default::default()
+                                    })
+                            ]
                         )
                         .width(Length::Fill)
                         .height(6)
